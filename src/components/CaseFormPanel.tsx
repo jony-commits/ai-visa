@@ -507,10 +507,15 @@ export const CaseFormPanel: React.FC<CaseFormPanelProps> = ({
               const suggestion = form.aiSuggestions[key];
               const isWide = spec.format === 'textarea';
 
+              const fieldId = `form-field-${key}`;
+
               return (
                 <div key={key} className={`space-y-1.5 ${isWide ? 'md:col-span-2' : ''}`}>
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                    <label
+                      htmlFor={fieldId}
+                      className="block text-xs font-medium text-slate-700 dark:text-slate-300"
+                    >
                       {spec.title}
                       {isRequired ? ' *' : ''}
                     </label>
@@ -524,6 +529,7 @@ export const CaseFormPanel: React.FC<CaseFormPanelProps> = ({
                   {spec.type === 'boolean' ? (
                     <label className="flex items-center gap-2.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs cursor-pointer">
                       <input
+                        id={fieldId}
                         type="checkbox"
                         checked={Boolean(val)}
                         onChange={(e) => updateField(key, e.target.checked)}
@@ -532,6 +538,7 @@ export const CaseFormPanel: React.FC<CaseFormPanelProps> = ({
                     </label>
                   ) : spec.enum ? (
                     <select
+                      id={fieldId}
                       value={String(val || '')}
                       onChange={(e) => updateField(key, e.target.value)}
                       className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
@@ -545,6 +552,7 @@ export const CaseFormPanel: React.FC<CaseFormPanelProps> = ({
                     </select>
                   ) : spec.format === 'textarea' ? (
                     <textarea
+                      id={fieldId}
                       rows={3}
                       value={String(val || '')}
                       onChange={(e) => updateField(key, e.target.value)}
@@ -553,6 +561,7 @@ export const CaseFormPanel: React.FC<CaseFormPanelProps> = ({
                     />
                   ) : (
                     <input
+                      id={fieldId}
                       type={spec.type === 'date' ? 'date' : spec.type === 'number' ? 'number' : 'text'}
                       value={val === undefined || val === null ? '' : String(val)}
                       onChange={(e) =>

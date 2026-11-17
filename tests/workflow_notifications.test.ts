@@ -186,17 +186,36 @@ describe('Phase 5: Configurable Workflows, Source-Verified Tracking, Appointment
     assert.equal(rescheduleRes.data.appointment.status, 'RESCHEDULED');
     assert.ok(rescheduleRes.data.notifications.length >= 1);
 
-    // Unified timeline combines workflow transitions, appointments, and notifications
+    // Unified timeline combines workflow transitions, appointments, tasks/deadlines, and notifications
     const tlRes = await api('/api/cases/app_apex_1/timeline', { token: applicantToken });
     assert.equal(tlRes.status, 200);
     const categories = new Set(tlRes.data.timeline.map((e: any) => e.category));
     assert.ok(categories.has('INTERNAL_WORKFLOW'));
     assert.ok(categories.has('APPOINTMENT'));
+    assert.ok(categories.has('TASK_DEADLINE'));
     assert.ok(categories.has('NOTIFICATION'));
   });
 
   it('never fabricates official status changes, blocks manual OFFICIAL_API spoofing, and syncs when authorized endpoint exists', async () => {
     const consultantToken = await login('consultant@apexmobility.demo');
+    const applicantToken = await login('applicant@apexmobility.demo');
+
+    // Applicant cannot record external status events or trigger official API sync
+    const applicantManualStatus = await api('/api/cases/app_apex_1/status-events', {
+      method: 'POST',
+      token: applicantToken,
+      body: {
+        statusText: 'Approved',
+        sourceType: 'CONSULTANT_MANUAL_UPDATE',
+      },
+    });
+    assert.equal(applicantManualStatus.status, 403);
+
+    const applicantSync = await api('/api/cases/app_apex_1/status-sync', {
+      method: 'POST',
+      token: applicantToken,
+    });
+    assert.equal(applicantSync.status, 403);
 
     // Before external update, status sync returns 409 UNAVAILABLE and does not mutate status
     const unconfiguredSync = await api('/api/cases/app_apex_1/status-sync', {
@@ -292,6 +311,14 @@ describe('Phase 5: Configurable Workflows, Source-Verified Tracking, Appointment
     const applicantToken = await login('applicant@apexmobility.demo');
     const pacificToken = await login('consultant@pacificrim.demo');
 
+    // Applicant cannot run the notification worker
+    const applicantWorkerErr = await api('/api/notifications/run-worker', {
+      method: 'POST',
+      token: applicantToken,
+      body: { forceDue: true },
+    });
+    assert.equal(applicantWorkerErr.status, 403);
+
     // Admin customizes template; applicant blocked
     const applicantTpl = await api('/api/notifications/templates/CASE_STAGE_CHANGED/EMAIL', {
       method: 'PATCH',
@@ -340,6 +367,40 @@ describe('Phase 5: Configurable Workflows, Source-Verified Tracking, Appointment
     assert.ok(
       applicantJobsWhenRevoked.every((j: any) => j.status === 'SKIPPED_NO_CONSENT'),
     );
+
+    // Schedule delayed BullMQ-compatible job in the future -> skipped when forceDue=false, delivered when forceDue=true
+    const futureTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const delayedDeadline = await api('/api/cases/app_apex_1/deadlines', {
+      method: 'PATCH',
+      token: consultantToken,
+      body: {
+        targetSubmissionDeadline: '2027-02-25T12:00:00.000Z',
+        scheduleReminder: true,
+        reminderScheduledFor: futureTime,
+      },
+    });
+    assert.equal(delayedDeadline.status, 200);
+    const delayedStaffJob = delayedDeadline.data.scheduledNotifications.find(
+      (j: any) => j.recipientUserId === 'usr_consultant_apex',
+    );
+    assert.ok(delayedStaffJob);
+    assert.equal(delayedStaffJob.scheduledFor, futureTime);
+
+    const workerNotDue = await api('/api/notifications/run-worker', {
+      method: 'POST',
+      token: consultantToken,
+      body: { jobId: delayedStaffJob.id, forceDue: false },
+    });
+    assert.equal(workerNotDue.status, 200);
+    assert.equal(workerNotDue.data.processed, 0);
+
+    const workerForceDue = await api('/api/notifications/run-worker', {
+      method: 'POST',
+      token: consultantToken,
+      body: { jobId: delayedStaffJob.id, forceDue: true },
+    });
+    assert.equal(workerForceDue.status, 200);
+    assert.equal(workerForceDue.data.delivered, 1);
 
     // Schedule deterministic retry & permanent failure job using 'fail://' gateway test prefix
     const failingJob = scheduleNotificationFromTemplate(db, {
@@ -401,6 +462,16 @@ describe('Phase 5: Configurable Workflows, Source-Verified Tracking, Appointment
     });
     assert.equal(blockedRetry.status, 409);
 
+    // Reset attempts re-queues from 0
+    const resetRetry = await api(`/api/notifications/${failingJob.id}/retry`, {
+      method: 'POST',
+      token: consultantToken,
+      body: { resetAttempts: true },
+    });
+    assert.equal(resetRetry.status, 200);
+    assert.equal(resetRetry.data.result.jobs[0].attempts, 1);
+    assert.equal(resetRetry.data.result.jobs[0].status, 'RETRY_WAIT');
+
     // Cross-tenant isolation check
     const crossTenantTrack = await api('/api/cases/app_apex_1/status-tracking', {
       token: pacificToken,
@@ -422,5 +493,96 @@ describe('Phase 5: Configurable Workflows, Source-Verified Tracking, Appointment
     });
     assert.equal(runAll.status, 200);
     assert.ok(runAll.data.delivered >= 1);
+  });
+
+  it('enforces consultant assignment RBAC, category-specific allowedNextStages, and applicant transition boundaries', async () => {
+    const adminToken = await login('admin@apexmobility.demo');
+    const consultantToken = await login('consultant@apexmobility.demo');
+    const applicantToken = await login('applicant@apexmobility.demo');
+    const applicant2Token = await login('applicant2@apexmobility.demo');
+
+    // Consultant cannot reassign cases (AGENCY_ADMIN only)
+    const consultantAssignErr = await api('/api/cases/app_apex_3/assign', {
+      method: 'PATCH',
+      token: consultantToken,
+      body: { consultantUserId: 'usr_consultant_apex' },
+    });
+    assert.equal(consultantAssignErr.status, 403);
+
+    // Admin assigns consultant to app_apex_3 -> schedules CONSULTANT_ASSIGNED notification & timeline event
+    const adminAssignOk = await api('/api/cases/app_apex_3/assign', {
+      method: 'PATCH',
+      token: adminToken,
+      body: { consultantUserId: 'usr_consultant_apex' },
+    });
+    assert.equal(adminAssignOk.status, 200);
+    assert.equal(adminAssignOk.data.assigned, true);
+    assert.equal(adminAssignOk.data.notifications.length, 1);
+    assert.equal(adminAssignOk.data.notifications[0].templateKey, 'CONSULTANT_ASSIGNED');
+
+    const tlApex3 = await api('/api/cases/app_apex_3/timeline', { token: consultantToken });
+    assert.equal(tlApex3.status, 200);
+    assert.ok(
+      tlApex3.data.timeline.some((item: any) => item.title === 'Consultant assigned to case'),
+    );
+
+    // Per-category workflow stage customization (STUDENT): restrict APPLICANT_INFO_PENDING -> DOCUMENT_COLLECTION only
+    const customStudentStage = await api('/api/workflows/stages/APPLICANT_INFO_PENDING', {
+      method: 'PATCH',
+      token: adminToken,
+      body: {
+        visaCategory: 'STUDENT',
+        allowedNextStages: ['DOCUMENT_COLLECTION'],
+      },
+    });
+    assert.equal(customStudentStage.status, 200);
+
+    // WITHDRAWN is now blocked for STUDENT case app_apex_3 even though allowed globally
+    const blockedByCategoryRule = await api('/api/cases/app_apex_3/transition', {
+      method: 'PATCH',
+      token: consultantToken,
+      body: { toStatus: 'WITHDRAWN', reason: 'Should be blocked by STUDENT rule' },
+    });
+    assert.equal(blockedByCategoryRule.status, 400);
+
+    // Applicant1 cannot transition Applicant2's case app_apex_3 (403)
+    const crossApplicantErr = await api('/api/cases/app_apex_3/transition', {
+      method: 'PATCH',
+      token: applicantToken,
+      body: { toStatus: 'DOCUMENT_COLLECTION' },
+    });
+    assert.equal(crossApplicantErr.status, 403);
+
+    // Applicant2 can advance own STUDENT case to DOCUMENT_COLLECTION
+    const applicant2Ok = await api('/api/cases/app_apex_3/transition', {
+      method: 'PATCH',
+      token: applicant2Token,
+      body: { toStatus: 'DOCUMENT_COLLECTION', reason: 'Uploaded study info' },
+    });
+    assert.equal(applicant2Ok.status, 200);
+
+    // Applicant2 cannot advance own case to CONSULTANT_REVIEW (staff-only)
+    const applicant2StaffErr = await api('/api/cases/app_apex_3/transition', {
+      method: 'PATCH',
+      token: applicant2Token,
+      body: { toStatus: 'DOCUMENT_VERIFICATION' },
+    });
+    assert.equal(applicant2StaffErr.status, 400);
+
+    // Advance app_apex_2 from CONSULTANT_REVIEW -> APPLICANT_APPROVAL (staff), then applicant approves -> READY_FOR_SUBMISSION
+    const toApproval = await api('/api/cases/app_apex_2/transition', {
+      method: 'PATCH',
+      token: consultantToken,
+      body: { toStatus: 'APPLICANT_APPROVAL', reason: 'Ready for applicant sign-off' },
+    });
+    assert.equal(toApproval.status, 200);
+
+    const applicantApprove = await api('/api/cases/app_apex_2/transition', {
+      method: 'PATCH',
+      token: applicantToken,
+      body: { toStatus: 'READY_FOR_SUBMISSION', reason: 'Applicant approved package' },
+    });
+    assert.equal(applicantApprove.status, 200);
+    assert.equal(applicantApprove.data.toStatus, 'READY_FOR_SUBMISSION');
   });
 });

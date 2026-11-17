@@ -512,26 +512,55 @@ export function resolveFormSchemaForCase(
   db: AppDatabase,
   destinationCountry: string,
   visaCategory: string,
+  organizationId?: string,
 ): { row: Record<string, unknown>; schema: VisaFormJsonSchema } {
   seedFormSchemas(db);
 
-  let row = db
-    .prepare(
-      `
-      SELECT * FROM visa_form_schemas
-      WHERE destination_country = ? AND visa_category_code = ? AND approval_status = 'PUBLISHED'
-      ORDER BY created_at DESC LIMIT 1
-    `,
-    )
-    .get(destinationCountry, visaCategory) as Record<string, unknown> | undefined;
+  let row: Record<string, unknown> | undefined;
+
+  if (organizationId) {
+    row = db
+      .prepare(
+        `
+        SELECT * FROM visa_form_schemas
+        WHERE organization_id = ? AND destination_country = ? AND visa_category_code = ? AND approval_status = 'PUBLISHED'
+        ORDER BY COALESCE(approved_at, created_at) DESC, created_at DESC LIMIT 1
+      `,
+      )
+      .get(organizationId, destinationCountry, visaCategory) as Record<string, unknown> | undefined;
+  }
 
   if (!row) {
     row = db
       .prepare(
         `
         SELECT * FROM visa_form_schemas
-        WHERE destination_country = '*' AND visa_category_code = '*' AND approval_status = 'PUBLISHED'
-        ORDER BY created_at DESC LIMIT 1
+        WHERE organization_id IS NULL AND destination_country = ? AND visa_category_code = ? AND approval_status = 'PUBLISHED'
+        ORDER BY COALESCE(approved_at, created_at) DESC, created_at DESC LIMIT 1
+      `,
+      )
+      .get(destinationCountry, visaCategory) as Record<string, unknown> | undefined;
+  }
+
+  if (!row && organizationId) {
+    row = db
+      .prepare(
+        `
+        SELECT * FROM visa_form_schemas
+        WHERE organization_id = ? AND destination_country = '*' AND visa_category_code = '*' AND approval_status = 'PUBLISHED'
+        ORDER BY COALESCE(approved_at, created_at) DESC, created_at DESC LIMIT 1
+      `,
+      )
+      .get(organizationId) as Record<string, unknown> | undefined;
+  }
+
+  if (!row) {
+    row = db
+      .prepare(
+        `
+        SELECT * FROM visa_form_schemas
+        WHERE organization_id IS NULL AND destination_country = '*' AND visa_category_code = '*' AND approval_status = 'PUBLISHED'
+        ORDER BY COALESCE(approved_at, created_at) DESC, created_at DESC LIMIT 1
       `,
       )
       .get() as Record<string, unknown> | undefined;

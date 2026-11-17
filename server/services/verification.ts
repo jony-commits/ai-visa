@@ -1,6 +1,11 @@
 import { decryptField } from '../crypto.ts';
 import { AppDatabase, newId } from '../db.ts';
 
+export type RuleConditionType =
+  | 'ALWAYS'
+  | 'HAS_DEPENDENTS'
+  | 'STAY_OVER_30_DAYS';
+
 export interface RequirementTemplate {
   requirementCode: string;
   title: string;
@@ -8,12 +13,14 @@ export interface RequirementTemplate {
   documentType: string;
   isMandatory: boolean;
   conditionNote: string;
+  conditionType?: RuleConditionType;
 }
 
-function buildRequirementsForRoute(params: {
+function buildBuiltinRequirementsForRoute(params: {
   destinationCountry: string;
   visaCategory: string;
   hasDependents: boolean;
+  travelDurationDays?: number;
 }): RequirementTemplate[] {
   const base: RequirementTemplate[] = [
     {
@@ -23,6 +30,7 @@ function buildRequirementsForRoute(params: {
       documentType: 'PASSPORT',
       isMandatory: true,
       conditionNote: 'Demonstration rule: valid passport required for all routes.',
+      conditionType: 'ALWAYS',
     },
     {
       requirementCode: 'PASSPORT_PHOTO',
@@ -31,6 +39,7 @@ function buildRequirementsForRoute(params: {
       documentType: 'PASSPORT_PHOTO',
       isMandatory: true,
       conditionNote: 'Required biometric photo.',
+      conditionType: 'ALWAYS',
     },
     {
       requirementCode: 'BANK_STATEMENTS',
@@ -39,6 +48,7 @@ function buildRequirementsForRoute(params: {
       documentType: 'BANK_STATEMENT',
       isMandatory: true,
       conditionNote: 'Proof of sufficient funds (demonstration requirement).',
+      conditionType: 'ALWAYS',
     },
   ];
 
@@ -51,6 +61,7 @@ function buildRequirementsForRoute(params: {
         documentType: 'TRAVEL_INSURANCE',
         isMandatory: true,
         conditionNote: 'Germany Schengen Demonstration Rule (demo-2026.1).',
+        conditionType: 'ALWAYS',
       },
       {
         requirementCode: 'TRAVEL_ITINERARY_LODGING',
@@ -59,6 +70,7 @@ function buildRequirementsForRoute(params: {
         documentType: 'TRAVEL_ITINERARY',
         isMandatory: true,
         conditionNote: 'Schengen short-stay itinerary proof.',
+        conditionType: 'ALWAYS',
       },
     );
   } else if (params.visaCategory === 'BUSINESS' || params.visaCategory === 'WORK') {
@@ -70,6 +82,7 @@ function buildRequirementsForRoute(params: {
         documentType: 'EMPLOYMENT_LETTER',
         isMandatory: true,
         conditionNote: 'Required for business and employment routes.',
+        conditionType: 'ALWAYS',
       },
       {
         requirementCode: 'INVITATION_LETTER',
@@ -78,6 +91,7 @@ function buildRequirementsForRoute(params: {
         documentType: 'INVITATION_LETTER',
         isMandatory: false,
         conditionNote: 'Required when visiting a host client or office.',
+        conditionType: 'ALWAYS',
       },
     );
   } else if (params.visaCategory === 'STUDENT') {
@@ -88,6 +102,19 @@ function buildRequirementsForRoute(params: {
       documentType: 'ADMISSION_LETTER',
       isMandatory: true,
       conditionNote: 'Required for student visa routes.',
+      conditionType: 'ALWAYS',
+    });
+  }
+
+  if ((params.travelDurationDays ?? 0) > 30) {
+    base.push({
+      requirementCode: 'LONG_STAY_ACCOMMODATION_PROOF',
+      title: 'Extended Stay Accommodation & Return Ties Proof',
+      description: 'Lease, university housing, or long-term lodging confirmation for stays over 30 days.',
+      documentType: 'TRAVEL_ITINERARY',
+      isMandatory: true,
+      conditionNote: 'Triggered because intended travel duration exceeds 30 days.',
+      conditionType: 'STAY_OVER_30_DAYS',
     });
   }
 
@@ -99,10 +126,101 @@ function buildRequirementsForRoute(params: {
       documentType: 'BIRTH_MARRIAGE_CERT',
       isMandatory: true,
       conditionNote: 'Triggered because dependents are listed in applicant profile.',
+      conditionType: 'HAS_DEPENDENTS',
     });
   }
 
   return base;
+}
+
+export function resolvePublishedVisaRoute(
+  db: AppDatabase,
+  params: {
+    destinationCountry: string;
+    visaCategory: string;
+    organizationId?: string;
+    routeId?: string | null;
+  },
+): Record<string, unknown> | undefined {
+  if (params.routeId) {
+    const byId = db
+      .prepare("SELECT * FROM visa_routes WHERE id = ? AND approval_status = 'PUBLISHED'")
+      .get(params.routeId) as Record<string, unknown> | undefined;
+    if (byId) return byId;
+  }
+
+  if (params.organizationId) {
+    const orgSpecific = db
+      .prepare(
+        `
+        SELECT * FROM visa_routes
+        WHERE organization_id = ? AND destination_country = ? AND visa_category_code = ? AND approval_status = 'PUBLISHED'
+        ORDER BY COALESCE(approved_at, effective_from) DESC
+        LIMIT 1
+      `,
+      )
+      .get(params.organizationId, params.destinationCountry, params.visaCategory) as
+      | Record<string, unknown>
+      | undefined;
+    if (orgSpecific) return orgSpecific;
+  }
+
+  return db
+    .prepare(
+      `
+      SELECT * FROM visa_routes
+      WHERE organization_id IS NULL AND destination_country = ? AND visa_category_code = ? AND approval_status = 'PUBLISHED'
+      ORDER BY COALESCE(approved_at, effective_from) DESC
+      LIMIT 1
+    `,
+    )
+    .get(params.destinationCountry, params.visaCategory) as Record<string, unknown> | undefined;
+}
+
+export function evaluateCountryVisaRuleEngine(
+  db: AppDatabase,
+  params: {
+    destinationCountry: string;
+    visaCategory: string;
+    organizationId?: string;
+    routeId?: string | null;
+    hasDependents: boolean;
+    travelDurationDays?: number;
+  },
+): {
+  matchedRoute: Record<string, unknown> | null;
+  templates: RequirementTemplate[];
+  ruleSource: 'CUSTOM_RULE_DEFINITION' | 'BUILTIN_ROUTE_ADAPTER';
+} {
+  const matchedRoute = resolvePublishedVisaRoute(db, params) || null;
+  const rawJson = matchedRoute?.requirements_json ? String(matchedRoute.requirements_json) : null;
+
+  if (rawJson) {
+    try {
+      const parsed = JSON.parse(rawJson) as RequirementTemplate[];
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const filtered = parsed.filter((req) => {
+          const cond = req.conditionType || 'ALWAYS';
+          if (cond === 'HAS_DEPENDENTS') return params.hasDependents;
+          if (cond === 'STAY_OVER_30_DAYS') return (params.travelDurationDays ?? 0) > 30;
+          return true;
+        });
+        return {
+          matchedRoute,
+          templates: filtered,
+          ruleSource: 'CUSTOM_RULE_DEFINITION',
+        };
+      }
+    } catch {
+      // Fallback to builtin rule adapter if malformed
+    }
+  }
+
+  return {
+    matchedRoute,
+    templates: buildBuiltinRequirementsForRoute(params),
+    ruleSource: 'BUILTIN_ROUTE_ADAPTER',
+  };
 }
 
 export function syncChecklistForCase(
@@ -125,10 +243,33 @@ export function syncChecklistForCase(
     | undefined;
 
   const dependents = profileRow ? JSON.parse(profileRow.dependents_json || '[]') : [];
-  const templates = buildRequirementsForRoute({
+
+  // Derive stay duration from saved dynamic form arrivalDate/departureDate if available
+  let travelDurationDays: number | undefined;
+  const formRow = db
+    .prepare('SELECT answers_json FROM application_forms WHERE application_id = ? AND organization_id = ?')
+    .get(applicationId, organizationId) as { answers_json?: string } | undefined;
+  if (formRow?.answers_json) {
+    try {
+      const ans = JSON.parse(formRow.answers_json) as Record<string, unknown>;
+      if (typeof ans.arrivalDate === 'string' && typeof ans.departureDate === 'string') {
+        const diffMs = Date.parse(ans.departureDate) - Date.parse(ans.arrivalDate);
+        if (Number.isFinite(diffMs) && diffMs > 0) {
+          travelDurationDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        }
+      }
+    } catch {
+      // Ignore parse error
+    }
+  }
+
+  const { templates } = evaluateCountryVisaRuleEngine(db, {
     destinationCountry: String(appRow.destination_country),
     visaCategory: String(appRow.visa_category),
+    organizationId,
+    routeId: appRow.route_id ? String(appRow.route_id) : null,
     hasDependents: Array.isArray(dependents) && dependents.length > 0,
+    travelDurationDays,
   });
 
   const now = new Date().toISOString();
@@ -166,7 +307,13 @@ export function syncChecklistForCase(
       .get(applicationId, tpl.requirementCode) as { id: string } | undefined;
 
     if (existing) {
-      db.prepare('UPDATE document_requirements SET status = ?, updated_at = ? WHERE id = ?').run(
+      db.prepare(
+        'UPDATE document_requirements SET title = ?, description = ?, is_mandatory = ?, condition_note = ?, status = ?, updated_at = ? WHERE id = ?',
+      ).run(
+        tpl.title,
+        tpl.description,
+        tpl.isMandatory ? 1 : 0,
+        tpl.conditionNote,
         nextStatus,
         now,
         existing.id,

@@ -48,6 +48,7 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
   const [targetDeadline, setTargetDeadline] = useState('');
   const [stageDueAt, setStageDueAt] = useState('');
   const [sendDeadlineReminder, setSendDeadlineReminder] = useState(true);
+  const [reminderScheduledFor, setReminderScheduledFor] = useState('');
 
   // Manual external status state
   const [statusText, setStatusText] = useState('');
@@ -55,7 +56,7 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
   const [trackingRef, setTrackingRef] = useState('');
   const [evidenceNote, setEvidenceNote] = useState('');
 
-  // Appointment create state
+  // Appointment create & reschedule state
   const [apptType, setApptType] = useState<CaseAppointmentItem['appointment_type']>('BIOMETRICS');
   const [centerName, setCenterName] = useState('');
   const [centerAddress, setCenterAddress] = useState('');
@@ -63,6 +64,11 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
   const [timezone, setTimezone] = useState('UTC');
   const [bookingReference, setBookingReference] = useState('');
   const [instructions, setInstructions] = useState('');
+
+  const [reschedulingId, setReschedulingId] = useState<string | null>(null);
+  const [rescheduleAt, setRescheduleAt] = useState('');
+  const [rescheduleCenter, setRescheduleCenter] = useState('');
+  const [rescheduleRef, setRescheduleRef] = useState('');
 
   const [busy, setBusy] = useState(false);
 
@@ -113,8 +119,13 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
           targetSubmissionDeadline: targetDeadline ? new Date(targetDeadline).toISOString() : null,
           stageDueAt: stageDueAt ? new Date(stageDueAt).toISOString() : null,
           scheduleReminder: sendDeadlineReminder,
+          reminderScheduledFor:
+            sendDeadlineReminder && reminderScheduledFor
+              ? new Date(reminderScheduledFor).toISOString()
+              : undefined,
         },
       });
+      setReminderScheduledFor('');
       setBanner('Deadlines updated and reminders scheduled where applicable.');
       await loadAll();
       onUpdated();
@@ -225,6 +236,40 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
       onUpdated();
     } catch (err: any) {
       setError(err.message || 'Failed to update appointment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startReschedule(apt: CaseAppointmentItem) {
+    setReschedulingId(apt.id);
+    setRescheduleAt(apt.scheduled_at.slice(0, 16));
+    setRescheduleCenter(apt.center_name);
+    setRescheduleRef(apt.booking_reference || '');
+  }
+
+  async function handleRescheduleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!reschedulingId || !rescheduleAt) return;
+    setBusy(true);
+    setError(null);
+    setBanner(null);
+    try {
+      await apiRequest(`/api/cases/${caseId}/appointments/${reschedulingId}`, {
+        method: 'PATCH',
+        body: {
+          status: 'RESCHEDULED',
+          scheduledAt: new Date(rescheduleAt).toISOString(),
+          centerName: rescheduleCenter.trim() || undefined,
+          bookingReference: rescheduleRef.trim() || null,
+        },
+      });
+      setReschedulingId(null);
+      setBanner('Appointment rescheduled and updated notifications queued.');
+      await loadAll();
+      onUpdated();
+    } catch (err: any) {
+      setError(err.message || 'Failed to reschedule appointment');
     } finally {
       setBusy(false);
     }
@@ -351,7 +396,7 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
             {overview.adapterContracts.map((c) => (
               <div
                 key={c.adapterId}
-                className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 space-y-1"
+                className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 space-y-1.5"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium">{c.displayName}</span>
@@ -365,7 +410,13 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
                     {c.connected ? 'CONNECTED' : 'UNCONFIGURED'}
                   </span>
                 </div>
-                <p className="text-slate-500 dark:text-slate-400">{c.reason}</p>
+                <p className="text-slate-600 dark:text-slate-300">{c.reason}</p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">{c.pollingPolicy}</p>
+                {c.targetPortalUrl && (
+                  <div className="font-mono text-[11px] text-slate-500 truncate">
+                    Official source: {c.targetPortalUrl}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -533,6 +584,19 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
                 />
                 Queue deadline reminder notification (respects applicant consent)
               </label>
+              {sendDeadlineReminder && (
+                <div className="space-y-1">
+                  <label className="block font-medium text-slate-600 dark:text-slate-400">
+                    Delayed Dispatch Time (Optional UTC — blank sends immediately)
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={reminderScheduledFor}
+                    onChange={(e) => setReminderScheduledFor(e.target.value)}
+                    className="w-full px-3 py-2 font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                  />
+                </div>
+              )}
               <button
                 type="submit"
                 disabled={busy}
@@ -571,11 +635,22 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
                     {formatDateTimeUtc(apt.scheduled_at)} ({apt.timezone})
                     {apt.booking_reference ? ` · Ref: ${apt.booking_reference}` : ''}
                   </div>
+                  {apt.center_address && (
+                    <div className="text-slate-500 dark:text-slate-400">{apt.center_address}</div>
+                  )}
                   {apt.instructions && (
                     <p className="text-slate-500 dark:text-slate-400">{apt.instructions}</p>
                   )}
                   {isStaff && apt.status !== 'COMPLETED' && apt.status !== 'CANCELLED' && (
                     <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => startReschedule(apt)}
+                        className="px-2.5 py-1 border border-slate-300 dark:border-slate-700 rounded hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      >
+                        Reschedule
+                      </button>
                       <button
                         type="button"
                         disabled={busy}
@@ -593,6 +668,64 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
                         Cancel & Notify
                       </button>
                     </div>
+                  )}
+
+                  {isStaff && reschedulingId === apt.id && (
+                    <form
+                      onSubmit={handleRescheduleSubmit}
+                      className="mt-2 p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-3 gap-2 items-end"
+                    >
+                      <div className="space-y-1">
+                        <label className="block font-medium text-slate-600 dark:text-slate-400">
+                          New Date & Time (UTC)
+                        </label>
+                        <input
+                          type="datetime-local"
+                          required
+                          value={rescheduleAt}
+                          onChange={(e) => setRescheduleAt(e.target.value)}
+                          className="w-full px-2.5 py-1.5 font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="block font-medium text-slate-600 dark:text-slate-400">
+                          Center Name
+                        </label>
+                        <input
+                          type="text"
+                          value={rescheduleCenter}
+                          onChange={(e) => setRescheduleCenter(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="block font-medium text-slate-600 dark:text-slate-400">
+                          Booking Ref
+                        </label>
+                        <input
+                          type="text"
+                          value={rescheduleRef}
+                          onChange={(e) => setRescheduleRef(e.target.value)}
+                          className="w-full px-2.5 py-1.5 font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+                        />
+                      </div>
+                      <div className="sm:col-span-3 flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setReschedulingId(null)}
+                          className="px-2.5 py-1 border border-slate-300 dark:border-slate-700 rounded cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={busy}
+                          className="px-3 py-1 text-white bg-blue-700 hover:bg-blue-800 rounded cursor-pointer"
+                        >
+                          Confirm Reschedule
+                        </button>
+                      </div>
+                    </form>
                   )}
                 </div>
               ))}
@@ -666,6 +799,30 @@ export const CaseTrackingPanel: React.FC<CaseTrackingPanelProps> = ({
                     className="w-1/2 px-3 py-2 font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
                   />
                 </div>
+              </div>
+              <div className="space-y-1">
+                <label className="block font-medium text-slate-600 dark:text-slate-400">
+                  Center Address (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={centerAddress}
+                  onChange={(e) => setCenterAddress(e.target.value)}
+                  placeholder="Street address & suite"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block font-medium text-slate-600 dark:text-slate-400">
+                  Applicant Instructions (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={instructions}
+                  onChange={(e) => setInstructions(e.target.value)}
+                  placeholder="Documents to bring on arrival"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
               </div>
               <div className="sm:col-span-2 flex justify-end">
                 <button

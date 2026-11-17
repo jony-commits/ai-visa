@@ -43,6 +43,10 @@ Meridian Visa uses a modular full-stack TypeScript architecture designed to run 
    - Treats all AI outputs as unverified drafts requiring human verification.
 
 ## 4. Frontend Architecture (`src/`)
-- Single-page React 19 application with modular domain views (`AuthPortal`, `WorkspaceShell`, `CasesView`, `KanbanBoard`, `ApplicantProfileView`, `TeamAdminView`, `SecuritySettingsView`, `RoadmapView`).
-- Centralized API client (`src/lib/api.ts`) with typed DTOs and automatic session/error handling.
-- Dual-theme CSS architecture (`@custom-variant dark` + semantic surface tokens).
+- Single-page React 19 application with modular domain views (`AuthPortal`, `RoleDashboardView`, `CasesView`, `CaseDetailPanel`, `CaseDocumentsPanel`, `CaseFormPanel`, `CaseTrackingPanel`, `VerificationQueueView`, `WorkflowTemplatesView`, `ApplicantProfileView`, `TeamAdminView`, `SecurityAuditView`, `RoadmapView`).
+- Centralized API client (`src/lib/api.ts`) with typed DTOs and automatic session/error handling with explicit loading, empty, and retryable error states.
+- Dual-theme CSS architecture (`@custom-variant dark` + semantic surface tokens, `.tabular-nums` alignment, and explicit label + tone state signaling).
+
+## 5. Deployment & External Integration Boundaries
+- See `/docs/DEPLOYMENT.md` for single-process vs. multi-service deployment commands, required environment variables, verification gates, and external integration blockers (`PostgreSQL/Redis`, `S3`, live `GEMINI_API_KEY`, official consular APIs, and SMTP/SMS gateways).
+

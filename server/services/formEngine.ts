@@ -50,6 +50,7 @@ export function ensureApplicationForm(
     db,
     String(appRow.destination_country),
     String(appRow.visa_category),
+    organizationId,
   );
 
   let formRow = db

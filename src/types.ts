@@ -593,6 +593,208 @@ export interface NotificationJobItem {
   updatedAt: string;
 }
 
+export interface AnalyticsOverviewData {
+  scope: 'tenant' | 'platform';
+  role: string;
+  isPlatformAdmin: boolean;
+  summary: {
+    totalCases: number;
+    activeCases: number;
+    pendingApplicantAction: number;
+    inReviewOrReady: number;
+    submittedOrDecided: number;
+    unassignedCases: number;
+    assignedToMeCount: number;
+    overdueSlaCount: number;
+    dueWithin48hCount: number;
+    avgTurnaroundHours: number | null;
+    hasCompletedCases: boolean;
+    openTasksCount: number;
+    upcomingAppointmentsCount: number;
+    pendingDocumentsCount: number;
+    openVerificationIssuesCount: number;
+    quarantinedDocsCount: number;
+  };
+  stageBreakdown: Array<{
+    stageCode: string;
+    count: number;
+    overdueCount: number;
+    avgAgeHours: number;
+  }>;
+  priorityCases: Array<{
+    id: string;
+    referenceNumber: string;
+    applicantName: string;
+    destinationCountry: string;
+    visaCategory: string;
+    internalStatus: InternalCaseStatus;
+    consultantName: string | null;
+    stageDueAt: string | null;
+    targetSubmissionDeadline: string | null;
+    slaState: 'OVERDUE' | 'DUE_SOON' | 'ON_TRACK' | 'UNSET';
+    actionReason: string;
+  }>;
+  consultantWorkload: Array<{
+    userId: string;
+    fullName: string;
+    role: string;
+    activeCount: number;
+    overdueCount: number;
+    dueSoonCount: number;
+  }>;
+  upcomingAppointments: Array<
+    CaseAppointmentItem & {
+      reference_number: string;
+      applicant_name: string;
+    }
+  >;
+  notificationDelivery: {
+    scheduled: number;
+    retryWait: number;
+    delivered: number;
+    failedPermanent: number;
+    skippedNoConsent: number;
+  };
+  processingJobs: {
+    queued: number;
+    active: number;
+    completed: number;
+    failed: number;
+  };
+  applicantSummary: {
+    onboardingCompleted: boolean;
+    consentPersonal: boolean;
+    consentAi: boolean;
+    consentComms: boolean;
+    missingMandatoryDocsCount: number;
+    unapprovedCompleteFormsCount: number;
+  } | null;
+}
+
+export interface AiUsageAnalyticsData {
+  scope: 'tenant' | 'platform';
+  geminiConfigured: boolean;
+  totals: {
+    totalCalls: number;
+    successCount: number;
+    failedCount: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
+  };
+  byModel: Array<{
+    provider: string;
+    model: string;
+    prompt_version: string;
+    call_count: number;
+    success_count: number;
+    failed_count: number;
+    input_tokens: number;
+    output_tokens: number;
+  }>;
+  extractionBreakdown: Array<{
+    ai_provider: string;
+    model_name: string;
+    document_count: number;
+    confirmed_count: number;
+    avg_confidence: number | null;
+  }>;
+  byOrganization: Array<{
+    organization_id: string;
+    organization_name: string;
+    call_count: number;
+    failed_count: number;
+    input_tokens: number;
+    output_tokens: number;
+  }>;
+  recentLogs: Array<{
+    id: string;
+    organization_id: string;
+    organization_name: string | null;
+    user_id: string | null;
+    actor_name: string | null;
+    actor_email: string | null;
+    application_id: string | null;
+    reference_number: string | null;
+    document_id: string | null;
+    provider: string;
+    model: string;
+    prompt_version: string;
+    input_tokens: number;
+    output_tokens: number;
+    status: string;
+    created_at: string;
+  }>;
+}
+
+export interface AdminTenantSummary {
+  id: string;
+  name: string;
+  slug: string;
+  country_code: string;
+  plan_tier: string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'PENDING';
+  created_at: string;
+  member_count: number;
+  case_count: number;
+  overdue_cases_count: number;
+  open_issues_count: number;
+  failed_notifications_count: number;
+  ai_call_count: number;
+  ai_total_tokens: number;
+}
+
+export type RuleConditionType = 'ALWAYS' | 'HAS_DEPENDENTS' | 'STAY_OVER_30_DAYS';
+export type RuleApprovalStatus = 'DRAFT' | 'IN_REVIEW' | 'PUBLISHED' | 'ARCHIVED';
+
+export interface VisaRuleRequirementItem {
+  requirementCode: string;
+  title: string;
+  description: string;
+  documentType: string;
+  isMandatory: boolean;
+  conditionNote: string;
+  conditionType?: RuleConditionType;
+}
+
+export interface VisaRuleRouteDetail {
+  id: string;
+  organization_id: string | null;
+  organization_name?: string | null;
+  destination_country: string;
+  country_name: string;
+  visa_category_code: string;
+  category_name: string;
+  title: string;
+  rule_version: string;
+  is_demo_rule: number | boolean;
+  isDemoRule: boolean;
+  official_source_url: string | null;
+  source_verified_at: string | null;
+  effective_from: string;
+  summary: string;
+  approvalStatus: RuleApprovalStatus;
+  hasCustomRequirements: boolean;
+  requirements: VisaRuleRequirementItem[];
+}
+
+export interface FormSchemaRecord {
+  id: string;
+  organizationId: string | null;
+  organizationName: string | null;
+  destinationCountry: string;
+  visaCategoryCode: string;
+  schemaKey: string;
+  version: string;
+  title: string;
+  isDemoRule: boolean;
+  officialSourceUrl: string | null;
+  approvalStatus: RuleApprovalStatus;
+  createdAt: string;
+  approvedAt: string | null;
+  schema: VisaFormJsonSchema;
+}
+
 export function formatShortDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -623,6 +825,7 @@ export function statusSemanticTone(status: string): string {
       'HANDOFF_PACKAGE_READY',
       'DELIVERED',
       'SYNCED',
+      'PUBLISHED',
     ].includes(status)
   ) {
     return 'text-emerald-700 dark:text-emerald-400';
@@ -639,6 +842,7 @@ export function statusSemanticTone(status: string): string {
       'WARNING',
       'CORRECTION_REQUESTED',
       'PENDING_REVIEW',
+      'IN_REVIEW',
       'RETRY_WAIT',
       'RESCHEDULED',
       'SCHEDULED',

@@ -62,6 +62,8 @@ export const CasesView: React.FC<CasesViewProps> = ({
   const [categoryFilter, setCategoryFilter] = useState('ALL');
   const [countryFilter, setCountryFilter] = useState('ALL');
   const [assignmentFilter, setAssignmentFilter] = useState<'ALL' | 'UNASSIGNED' | 'MINE'>('ALL');
+  const [slaFilter, setSlaFilter] = useState<'ALL' | 'OVERDUE' | 'DUE_SOON' | 'ON_TRACK'>('ALL');
+  const [officialFilter, setOfficialFilter] = useState<'ALL' | 'NOT_SUBMITTED' | 'TRACKED'>('ALL');
 
   // Staff member directory for applicant & consultant selection
   const [members, setMembers] = useState<OrganizationMember[]>([]);
@@ -87,8 +89,8 @@ export const CasesView: React.FC<CasesViewProps> = ({
     if (isStaff && openNewModal) {
       apiRequest<{ members: OrganizationMember[] }>('/api/organizations/members')
         .then((res) => setMembers(res.members))
-        .catch(() => {
-          // Ignore if unavailable
+        .catch((err) => {
+          setCreateError(err.message || 'Unable to load tenant staff and applicants directory.');
         });
     }
   }, [isStaff, openNewModal]);
@@ -101,12 +103,28 @@ export const CasesView: React.FC<CasesViewProps> = ({
     setRouteId(matchingRoutes[0]?.id || '');
   }, [destinationCountry, visaCategory]);
 
+  const nowMs = Date.now();
+  const in48hMs = nowMs + 48 * 60 * 60 * 1000;
+  const terminalSet = new Set(['APPROVED', 'REJECTED', 'WITHDRAWN', 'CLOSED']);
+
+  function getCaseSlaState(c: VisaCase): 'OVERDUE' | 'DUE_SOON' | 'ON_TRACK' {
+    if (terminalSet.has(c.internal_status) || !c.stage_due_at) return 'ON_TRACK';
+    const dueMs = new Date(c.stage_due_at).getTime();
+    if (!Number.isFinite(dueMs)) return 'ON_TRACK';
+    if (dueMs < nowMs) return 'OVERDUE';
+    if (dueMs <= in48hMs) return 'DUE_SOON';
+    return 'ON_TRACK';
+  }
+
   const filteredCases = cases.filter((c) => {
     if (statusFilter !== 'ALL' && c.internal_status !== statusFilter) return false;
     if (categoryFilter !== 'ALL' && c.visa_category !== categoryFilter) return false;
     if (countryFilter !== 'ALL' && c.destination_country !== countryFilter) return false;
     if (assignmentFilter === 'UNASSIGNED' && c.assigned_consultant_id !== null) return false;
     if (assignmentFilter === 'MINE' && c.assigned_consultant_id !== currentUser.userId) return false;
+    if (slaFilter !== 'ALL' && getCaseSlaState(c) !== slaFilter) return false;
+    if (officialFilter === 'NOT_SUBMITTED' && c.government_status !== 'NOT_SUBMITTED') return false;
+    if (officialFilter === 'TRACKED' && c.government_status === 'NOT_SUBMITTED') return false;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       return (
@@ -118,6 +136,25 @@ export const CasesView: React.FC<CasesViewProps> = ({
     }
     return true;
   });
+
+  const hasActiveFilters =
+    search.trim() !== '' ||
+    statusFilter !== 'ALL' ||
+    categoryFilter !== 'ALL' ||
+    countryFilter !== 'ALL' ||
+    assignmentFilter !== 'ALL' ||
+    slaFilter !== 'ALL' ||
+    officialFilter !== 'ALL';
+
+  function resetFilters() {
+    setSearch('');
+    setStatusFilter('ALL');
+    setCategoryFilter('ALL');
+    setCountryFilter('ALL');
+    setAssignmentFilter('ALL');
+    setSlaFilter('ALL');
+    setOfficialFilter('ALL');
+  }
 
   async function handleCreateCase(e: React.FormEvent) {
     e.preventDefault();
@@ -222,6 +259,39 @@ export const CasesView: React.FC<CasesViewProps> = ({
               <option value="MINE">Assigned to Me</option>
             </select>
           )}
+
+          <select
+            value={slaFilter}
+            onChange={(e) =>
+              setSlaFilter(e.target.value as 'ALL' | 'OVERDUE' | 'DUE_SOON' | 'ON_TRACK')
+            }
+            className="px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+          >
+            <option value="ALL">All SLA States</option>
+            <option value="OVERDUE">SLA Overdue</option>
+            <option value="DUE_SOON">Due &lt;= 48h</option>
+            <option value="ON_TRACK">On Track</option>
+          </select>
+
+          <select
+            value={officialFilter}
+            onChange={(e) => setOfficialFilter(e.target.value as 'ALL' | 'NOT_SUBMITTED' | 'TRACKED')}
+            className="px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+          >
+            <option value="ALL">All Official Statuses</option>
+            <option value="NOT_SUBMITTED">Not Submitted Externally</option>
+            <option value="TRACKED">External Status Recorded</option>
+          </select>
+
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="px-3 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 border border-slate-300 dark:border-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer whitespace-nowrap"
+            >
+              Clear Filters
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg shrink-0">
@@ -268,7 +338,9 @@ export const CasesView: React.FC<CasesViewProps> = ({
                 <th className="py-3 px-4 font-medium">Reference</th>
                 <th className="py-3 px-4 font-medium">Applicant</th>
                 <th className="py-3 px-4 font-medium">Country & Category</th>
-                <th className="py-3 px-4 font-medium">Workflow Status</th>
+                <th className="py-3 px-4 font-medium">Internal Workflow</th>
+                <th className="py-3 px-4 font-medium">Official Status</th>
+                <th className="py-3 px-4 font-medium">Deadline / SLA</th>
                 <th className="py-3 px-4 font-medium">Consultant</th>
                 <th className="py-3 px-4 font-medium text-right">Updated</th>
               </tr>
@@ -301,6 +373,37 @@ export const CasesView: React.FC<CasesViewProps> = ({
                     <span className={`font-medium ${statusSemanticTone(c.internal_status)}`}>
                       {STATUS_LABELS[c.internal_status] || c.internal_status}
                     </span>
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="font-medium text-slate-800 dark:text-slate-200">
+                      {c.government_status === 'NOT_SUBMITTED' ? 'Not Submitted' : c.government_status}
+                    </div>
+                    <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                      {c.government_status_verified_at
+                        ? `Verified ${formatShortDate(c.government_status_verified_at)}`
+                        : c.government_status_source}
+                    </div>
+                  </td>
+                  <td className="py-3 px-4 font-mono tabular-nums text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                    <div>
+                      Target: {formatShortDate(c.target_submission_deadline)}
+                    </div>
+                    <div
+                      className={`text-[11px] ${
+                        getCaseSlaState(c) === 'OVERDUE'
+                          ? 'text-red-700 dark:text-red-400 font-semibold'
+                          : getCaseSlaState(c) === 'DUE_SOON'
+                            ? 'text-amber-700 dark:text-amber-400 font-semibold'
+                            : 'text-slate-500 dark:text-slate-400'
+                      }`}
+                    >
+                      SLA: {formatShortDate(c.stage_due_at)}
+                      {getCaseSlaState(c) === 'OVERDUE'
+                        ? ' (Overdue)'
+                        : getCaseSlaState(c) === 'DUE_SOON'
+                          ? ' (Due <= 48h)'
+                          : ''}
+                    </div>
                   </td>
                   <td className="py-3 px-4 text-slate-600 dark:text-slate-300 whitespace-nowrap">
                     {c.consultant_name || 'Unassigned'}
@@ -336,32 +439,53 @@ export const CasesView: React.FC<CasesViewProps> = ({
                       No cases
                     </div>
                   ) : (
-                    colItems.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => onSelectCase(c.id)}
-                        className="w-full text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-500 rounded-lg p-3 space-y-1.5 transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-mono tabular-nums font-semibold text-blue-700 dark:text-blue-400">
-                            {c.reference_number}
-                          </span>
-                          <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                            {c.destination_country}
-                          </span>
-                        </div>
-                        <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
-                          {c.applicant_name}
-                        </div>
-                        <div className={`text-xs ${statusSemanticTone(c.internal_status)}`}>
-                          {STATUS_LABELS[c.internal_status]}
-                        </div>
-                        <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                          {c.consultant_name || 'Unassigned'}
-                        </div>
-                      </button>
-                    ))
+                    colItems.map((c) => {
+                      const slaState = getCaseSlaState(c);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => onSelectCase(c.id)}
+                          className="w-full text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-500 rounded-lg p-3 space-y-1.5 transition-colors cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-mono tabular-nums font-semibold text-blue-700 dark:text-blue-400">
+                              {c.reference_number}
+                            </span>
+                            <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                              {c.destination_country}
+                            </span>
+                          </div>
+                          <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
+                            {c.applicant_name}
+                          </div>
+                          <div className={`text-xs ${statusSemanticTone(c.internal_status)}`}>
+                            {STATUS_LABELS[c.internal_status]}
+                          </div>
+                          <div
+                            className={`text-[11px] font-mono tabular-nums truncate ${
+                              slaState === 'OVERDUE'
+                                ? 'text-red-700 dark:text-red-400 font-semibold'
+                                : slaState === 'DUE_SOON'
+                                  ? 'text-amber-700 dark:text-amber-400 font-semibold'
+                                  : 'text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            SLA: {formatShortDate(c.stage_due_at)}
+                            {slaState === 'OVERDUE'
+                              ? ' (Overdue)'
+                              : slaState === 'DUE_SOON'
+                                ? ' (Due <= 48h)'
+                                : ''}
+                            {' · '}Ext:{' '}
+                            {c.government_status === 'NOT_SUBMITTED' ? 'Unavailable' : c.government_status}
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                            {c.consultant_name || 'Unassigned'}
+                          </div>
+                        </button>
+                      );
+                    })
                   )}
                 </div>
               </div>

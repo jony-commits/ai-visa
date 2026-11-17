@@ -13,7 +13,7 @@
 - [x] **Task 1.8 — Automated Authorization, Validation & Tenant-Isolation Test Suite**: Verified registration, MFA, encryption at rest, onboarding validation, case assignment RBAC, same-tenant applicant isolation, and cross-tenant isolation via `tests/phase1.test.ts` and `tests/onboarding_cases.test.ts`.
 
 ### Phase 2: Country Configuration, Versioned Visa Rules, Checklists & Secure Uploads
-- [ ] Admin rule builder & approval workflow (`DRAFT` -> `IN_REVIEW` -> `PUBLISHED`)
+- [x] **Task 2.1 — Admin Rule & Dynamic Form Builder (`DRAFT` -> `IN_REVIEW` -> `PUBLISHED`)**: Implemented `server/routes/rulesAndForms.ts`, `RuleFormBuilderView.tsx`, and `tests/rules_form_builder.test.ts` with organization-isolated rule/form schema authoring, conditional checklist triggers (`ALWAYS`, `HAS_DEPENDENTS`, `STAY_OVER_30_DAYS`), official source verification guards, and live rule simulation.
 - [x] Country adapter execution generating dynamic document checklists (`syncChecklistForCase` supporting route, visa category & dependents)
 - [x] Private S3-compatible & HMAC-signed local object storage with magic-byte validation, SHA-256 deduplication & malware scanning hook
 
@@ -33,6 +33,6 @@
 - [x] Authorized official status adapter contracts (`server/services/statusAdapter.ts`), source-attributed manual updates with verification timestamps (`government_status_verified_at`, `status_tracking_events`), non-fabrication guards & appointment calendar (`CaseTrackingPanel.tsx`, `tests/workflow_notifications.test.ts`)
 
 ### Phase 6: Analytics, Super Admin Console & Production Hardening
-- [ ] Agency operational turnaround & bottleneck analytics
-- [ ] Super Admin tenant/rule/queue/AI-usage console
-- [ ] Playwright E2E suite & deployment security audit
+- [x] **Task 6.1 — Role Dashboards & Agency Operational Analytics**: Delivered `RoleDashboardView.tsx` and `/api/analytics/overview` + `/api/analytics/ai-usage` (`server/routes/analytics.ts`, `tests/analytics_admin.test.ts`) with Applicant, Consultant, Verification Officer, Agency Admin, and Super Admin operational KPIs, turnaround/bottleneck telemetry, workload capacity, AI token/OCR engine metrics, and explicit loading/empty/retryable error states.
+- [x] **Task 6.2 — Super Admin Tenant, Queue, Rule & AI Governance Console**: Delivered cross-tenant `SUPER_ADMIN` governance views (`/api/analytics/superadmin`), per-tenant organization KPIs, processing/notification queue health, demo/catalog rule coverage, AI token tracking, and seamless `Platform Governance` vs `Active Tenant` isolation toggle.
+- [x] **Task 6.3 — Playwright E2E Suite & Deployment Security Hardening**: Delivered isolated headless Chromium lifecycle tests (`playwright.config.ts`, `tests/e2e/visa-lifecycle.spec.ts`), updated `docs/DEPLOYMENT.md` with environment/Docker/RBAC hardening checklists and remaining external integration blockers, and verified `npm run lint`, `npm run build`, `npm test`, and `npm run test:e2e`.

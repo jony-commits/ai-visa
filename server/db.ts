@@ -565,6 +565,50 @@ export function migrateDatabase(db: AppDatabase): void {
   if (!colNames.has('stage_due_at')) {
     db.exec('ALTER TABLE visa_applications ADD COLUMN stage_due_at TEXT;');
   }
+
+  const routeCols = new Set(
+    (db.prepare('PRAGMA table_info(visa_routes)').all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    ),
+  );
+  if (!routeCols.has('organization_id')) {
+    db.exec('ALTER TABLE visa_routes ADD COLUMN organization_id TEXT;');
+  }
+  if (!routeCols.has('approval_status')) {
+    db.exec(
+      "ALTER TABLE visa_routes ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'PUBLISHED';",
+    );
+  }
+  if (!routeCols.has('requirements_json')) {
+    db.exec('ALTER TABLE visa_routes ADD COLUMN requirements_json TEXT;');
+  }
+  if (!routeCols.has('created_by_user_id')) {
+    db.exec('ALTER TABLE visa_routes ADD COLUMN created_by_user_id TEXT;');
+  }
+  if (!routeCols.has('approved_by_user_id')) {
+    db.exec('ALTER TABLE visa_routes ADD COLUMN approved_by_user_id TEXT;');
+  }
+  if (!routeCols.has('approved_at')) {
+    db.exec('ALTER TABLE visa_routes ADD COLUMN approved_at TEXT;');
+  }
+
+  const formSchemaCols = new Set(
+    (db.prepare('PRAGMA table_info(visa_form_schemas)').all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    ),
+  );
+  if (!formSchemaCols.has('organization_id')) {
+    db.exec('ALTER TABLE visa_form_schemas ADD COLUMN organization_id TEXT;');
+  }
+  if (!formSchemaCols.has('created_by_user_id')) {
+    db.exec('ALTER TABLE visa_form_schemas ADD COLUMN created_by_user_id TEXT;');
+  }
+  if (!formSchemaCols.has('approved_by_user_id')) {
+    db.exec('ALTER TABLE visa_form_schemas ADD COLUMN approved_by_user_id TEXT;');
+  }
+  if (!formSchemaCols.has('approved_at')) {
+    db.exec('ALTER TABLE visa_form_schemas ADD COLUMN approved_at TEXT;');
+  }
 }
 
 export function writeAuditLog(

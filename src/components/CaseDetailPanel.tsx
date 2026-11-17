@@ -223,7 +223,7 @@ export const CaseDetailPanel: React.FC<CaseDetailPanelProps> = ({
     }
   }
 
-  if (loading) {
+  if (loading && (!application || application.id !== caseId)) {
     return (
       <div className="p-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-xs text-slate-500 dark:text-slate-400">
         Loading case details and workflow history...

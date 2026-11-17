@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, FileCheck2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, FileCheck2, RefreshCw, Search } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import {
   DOCUMENT_TYPE_LABELS,
@@ -27,6 +27,11 @@ export const VerificationQueueView: React.FC<VerificationQueueViewProps> = ({
       }
     >
   >([]);
+
+  const [search, setSearch] = useState('');
+  const [reviewFilter, setReviewFilter] = useState('ALL');
+  const [scanFilter, setScanFilter] = useState('ALL');
+  const [severityFilter, setSeverityFilter] = useState('ALL');
 
   async function loadQueue() {
     setLoading(true);
@@ -59,6 +64,38 @@ export const VerificationQueueView: React.FC<VerificationQueueViewProps> = ({
   ).length;
   const quarantinedCount = documents.filter((d) => d.malware_scan_status === 'QUARANTINED').length;
 
+  const filteredDocuments = documents.filter((doc) => {
+    if (reviewFilter === 'AWAITING_REVIEW') {
+      if (!['PENDING', 'EXTRACTED', 'NEEDS_CORRECTION'].includes(doc.review_status)) return false;
+    } else if (reviewFilter !== 'ALL' && doc.review_status !== reviewFilter) {
+      return false;
+    }
+    if (scanFilter !== 'ALL' && doc.malware_scan_status !== scanFilter) return false;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      return (
+        doc.reference_number.toLowerCase().includes(q) ||
+        doc.applicant_name.toLowerCase().includes(q) ||
+        doc.original_filename.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
+  const filteredIssues = openIssues.filter((iss) => {
+    if (severityFilter !== 'ALL' && iss.severity !== severityFilter) return false;
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      return (
+        iss.reference_number.toLowerCase().includes(q) ||
+        iss.applicant_name.toLowerCase().includes(q) ||
+        iss.issue_type.toLowerCase().includes(q) ||
+        iss.explanation.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -76,14 +113,24 @@ export const VerificationQueueView: React.FC<VerificationQueueViewProps> = ({
           disabled={loading}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border border-slate-300 dark:border-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           Refresh Queue
         </button>
       </div>
 
       {error && (
-        <div className="p-3.5 rounded-lg border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 text-xs text-red-800 dark:text-red-300">
-          {error}
+        <div
+          role="alert"
+          className="p-3.5 rounded-lg border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 flex flex-wrap items-center justify-between gap-3 text-xs text-red-800 dark:text-red-300"
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={loadQueue}
+            className="px-3 py-1 font-medium border border-red-400 dark:border-red-700 rounded-lg cursor-pointer"
+          >
+            Retry
+          </button>
         </div>
       )}
 
@@ -119,20 +166,74 @@ export const VerificationQueueView: React.FC<VerificationQueueViewProps> = ({
         </div>
       </div>
 
+      {/* Filter Bar */}
+      <div className="flex flex-wrap items-center gap-2.5">
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter by reference, applicant, filename..."
+            className="w-full pl-9 pr-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+          />
+        </div>
+        <select
+          value={reviewFilter}
+          onChange={(e) => setReviewFilter(e.target.value)}
+          className="px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+        >
+          <option value="ALL">All Officer Statuses</option>
+          <option value="AWAITING_REVIEW">Awaiting Review</option>
+          <option value="EXTRACTED">Extracted</option>
+          <option value="NEEDS_CORRECTION">Needs Correction</option>
+          <option value="VERIFIED">Verified</option>
+          <option value="REJECTED">Rejected</option>
+        </select>
+        <select
+          value={scanFilter}
+          onChange={(e) => setScanFilter(e.target.value)}
+          className="px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+        >
+          <option value="ALL">All Scan States</option>
+          <option value="CLEAN">Clean</option>
+          <option value="QUARANTINED">Quarantined</option>
+        </select>
+        <select
+          value={severityFilter}
+          onChange={(e) => setSeverityFilter(e.target.value)}
+          className="px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
+        >
+          <option value="ALL">All Issue Severities</option>
+          <option value="CRITICAL">Critical</option>
+          <option value="WARNING">Warning</option>
+          <option value="INFO">Info</option>
+        </select>
+      </div>
+
       {/* Document Review Queue Table */}
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
-        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center gap-2">
-          <FileCheck2 className="w-4 h-4 text-slate-500" />
-          <h2 className="font-display text-base font-semibold">Tenant Document Submissions</h2>
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <FileCheck2 className="w-4 h-4 text-slate-500" />
+            <h2 className="font-display text-base font-semibold">Tenant Document Submissions</h2>
+          </div>
+          <span className="text-xs font-mono tabular-nums text-slate-500 dark:text-slate-400">
+            {filteredDocuments.length} of {documents.length} shown
+          </span>
         </div>
 
         {loading ? (
-          <div className="p-8 text-xs text-slate-500 dark:text-slate-400">
-            Loading verification queue...
+          <div className="p-6 space-y-2">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-10 bg-slate-100 dark:bg-slate-800/60 rounded animate-pulse" />
+            ))}
           </div>
-        ) : documents.length === 0 ? (
+        ) : filteredDocuments.length === 0 ? (
           <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-            No documents uploaded across active cases yet. Open any visa case to upload and inspect documents.
+            {documents.length === 0
+              ? 'No documents uploaded across active cases yet. Open any visa case to upload and inspect documents.'
+              : 'No documents match your active filter criteria.'}
           </div>
         ) : (
           <table className="w-full text-left border-collapse text-xs">
@@ -148,7 +249,7 @@ export const VerificationQueueView: React.FC<VerificationQueueViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {documents.map((doc) => (
+              {filteredDocuments.map((doc) => (
                 <tr key={doc.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                   <td className="py-3 px-5 font-mono tabular-nums font-medium text-blue-700 dark:text-blue-400">
                     {doc.reference_number}
@@ -192,17 +293,17 @@ export const VerificationQueueView: React.FC<VerificationQueueViewProps> = ({
         <div className="flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
           <h2 className="font-display text-base font-semibold">
-            Open Validation & Cross-Document Discrepancies ({openIssues.length})
+            Open Validation & Cross-Document Discrepancies ({filteredIssues.length})
           </h2>
         </div>
 
-        {openIssues.length === 0 ? (
+        {filteredIssues.length === 0 ? (
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            No open validation issues in the current tenant.
+            No open validation issues match the current filters.
           </p>
         ) : (
           <div className="divide-y divide-slate-200 dark:divide-slate-800">
-            {openIssues.map((iss) => (
+            {filteredIssues.map((iss) => (
               <div key={iss.id} className="py-3 flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-1">
                   <div className="text-xs font-semibold">

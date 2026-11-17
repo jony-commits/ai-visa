@@ -52,18 +52,31 @@ export function createFormsRouter(db: AppDatabase): Router {
   const router = Router();
 
   // 1. Versioned Schema Catalog
-  router.get('/form-schemas', requireAuth, (_req, res) => {
+  router.get('/form-schemas', requireAuth, (req, res) => {
     seedFormSchemas(db);
-    const schemas = db
-      .prepare(
-        `
-        SELECT id, destination_country, visa_category_code, schema_key, version,
-               title, is_demo_rule, official_source_url, approval_status, created_at
-        FROM visa_form_schemas
-        ORDER BY destination_country ASC, visa_category_code ASC
-      `,
-      )
-      .all();
+    const schemas = req.auth!.isPlatformAdmin
+      ? db
+          .prepare(
+            `
+            SELECT id, organization_id, destination_country, visa_category_code, schema_key, version,
+                   title, is_demo_rule, official_source_url, approval_status, created_at, approved_at
+            FROM visa_form_schemas
+            ORDER BY destination_country ASC, visa_category_code ASC, created_at DESC
+          `,
+          )
+          .all()
+      : db
+          .prepare(
+            `
+            SELECT id, organization_id, destination_country, visa_category_code, schema_key, version,
+                   title, is_demo_rule, official_source_url, approval_status, created_at, approved_at
+            FROM visa_form_schemas
+            WHERE (organization_id IS NULL OR organization_id = ?)
+              AND (approval_status = 'PUBLISHED' OR ? != 'APPLICANT')
+            ORDER BY CASE WHEN organization_id = ? THEN 0 ELSE 1 END, destination_country ASC, visa_category_code ASC, created_at DESC
+          `,
+          )
+          .all(req.auth!.organizationId, req.auth!.role, req.auth!.organizationId);
     res.json({ schemas });
   });
 

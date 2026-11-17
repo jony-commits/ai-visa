@@ -20,7 +20,7 @@ import { recordManualVerifiedStatusEvent } from '../services/statusAdapter.ts';
 export function createCasesRouter(db: AppDatabase): Router {
   const router = Router();
 
-  router.get('/catalog/routes', requireAuth, (_req, res) => {
+  router.get('/catalog/routes', requireAuth, (req, res) => {
     const countries = db
       .prepare('SELECT code, name, region FROM visa_countries WHERE enabled = 1 ORDER BY name ASC')
       .all();
@@ -34,10 +34,12 @@ export function createCasesRouter(db: AppDatabase): Router {
         FROM visa_routes r
         JOIN visa_countries c ON c.code = r.destination_country
         JOIN visa_categories cat ON cat.code = r.visa_category_code
-        ORDER BY r.title ASC
+        WHERE r.approval_status = 'PUBLISHED'
+          AND (r.organization_id IS NULL OR r.organization_id = ?)
+        ORDER BY CASE WHEN r.organization_id = ? THEN 0 ELSE 1 END, r.title ASC
       `,
       )
-      .all();
+      .all(req.auth!.organizationId, req.auth!.organizationId);
 
     res.json({ countries, categories, routes });
   });
@@ -172,16 +174,30 @@ export function createCasesRouter(db: AppDatabase): Router {
       targetApplicantId = applicantInOrg.user_id;
     }
 
-    // Resolve matching route (explicit routeId or first matching route for country + category)
+    // Resolve matching published route (explicit routeId or org/global published route for country + category)
     let matchedRoute = routeId
-      ? (db.prepare('SELECT * FROM visa_routes WHERE id = ?').get(routeId) as
-          | Record<string, unknown>
-          | undefined)
+      ? (db
+          .prepare(
+            "SELECT * FROM visa_routes WHERE id = ? AND approval_status = 'PUBLISHED' AND (organization_id IS NULL OR organization_id = ?)",
+          )
+          .get(routeId, req.auth!.organizationId) as Record<string, unknown> | undefined)
       : (db
           .prepare(
-            'SELECT * FROM visa_routes WHERE destination_country = ? AND visa_category_code = ? LIMIT 1',
+            `
+            SELECT * FROM visa_routes
+            WHERE destination_country = ? AND visa_category_code = ?
+              AND approval_status = 'PUBLISHED'
+              AND (organization_id IS NULL OR organization_id = ?)
+            ORDER BY CASE WHEN organization_id = ? THEN 0 ELSE 1 END, COALESCE(approved_at, effective_from) DESC
+            LIMIT 1
+          `,
           )
-          .get(destinationCountry, visaCategory) as Record<string, unknown> | undefined);
+          .get(
+            destinationCountry,
+            visaCategory,
+            req.auth!.organizationId,
+            req.auth!.organizationId,
+          ) as Record<string, unknown> | undefined);
 
     // Resolve consultant assignment on creation
     let resolvedConsultantId: string | null = null;

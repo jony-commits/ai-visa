@@ -3,8 +3,10 @@ import { Bell, GitBranch, Play, RefreshCw, Save } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import {
   AuthUser,
+  InternalCaseStatus,
   NotificationJobItem,
   NotificationTemplateItem,
+  STATUS_LABELS,
   statusSemanticTone,
   WorkflowStageConfigItem,
 } from '../types';
@@ -13,7 +15,19 @@ interface WorkflowTemplatesViewProps {
   currentUser: AuthUser;
 }
 
+const VISA_CATEGORY_FILTERS = [
+  { code: '*', label: 'All Visa Categories (Organization Default)' },
+  { code: 'TOURIST', label: 'Tourist / Visitor' },
+  { code: 'BUSINESS', label: 'Business Visitor' },
+  { code: 'STUDENT', label: 'Student / Study' },
+  { code: 'WORK', label: 'Work / Skilled Employment' },
+  { code: 'FAMILY', label: 'Family / Dependent' },
+  { code: 'TRANSIT', label: 'Transit' },
+  { code: 'OTHER', label: 'Other Country-Specific' },
+];
+
 export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ currentUser }) => {
+  const [visaCategory, setVisaCategory] = useState<string>('*');
   const [stages, setStages] = useState<WorkflowStageConfigItem[]>([]);
   const [templates, setTemplates] = useState<NotificationTemplateItem[]>([]);
   const [jobs, setJobs] = useState<NotificationJobItem[]>([]);
@@ -26,6 +40,8 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
   const [stageSla, setStageSla] = useState(72);
   const [stageEnabled, setStageEnabled] = useState(true);
   const [stageNotify, setStageNotify] = useState(true);
+  const [stageApplicantAllowed, setStageApplicantAllowed] = useState(false);
+  const [stageAllowedNext, setStageAllowedNext] = useState<InternalCaseStatus[]>([]);
 
   const [editingTemplate, setEditingTemplate] = useState<NotificationTemplateItem | null>(null);
   const [tplSubject, setTplSubject] = useState('');
@@ -42,7 +58,9 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
     setError(null);
     try {
       const [stageRes, tplRes, jobRes] = await Promise.all([
-        apiRequest<{ stages: WorkflowStageConfigItem[] }>('/api/workflows/stages'),
+        apiRequest<{ stages: WorkflowStageConfigItem[] }>(
+          `/api/workflows/stages?visaCategory=${encodeURIComponent(visaCategory)}`,
+        ),
         apiRequest<{ templates: NotificationTemplateItem[] }>('/api/notifications/templates'),
         apiRequest<{ jobs: NotificationJobItem[] }>('/api/notifications'),
       ]);
@@ -54,7 +72,7 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [visaCategory]);
 
   useEffect(() => {
     loadData();
@@ -66,6 +84,14 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
     setStageSla(s.slaHours);
     setStageEnabled(s.enabled);
     setStageNotify(s.notifyOnEnter);
+    setStageApplicantAllowed(s.applicantAllowed);
+    setStageAllowedNext(s.allowedNextStages);
+  }
+
+  function toggleNextStage(code: InternalCaseStatus) {
+    setStageAllowedNext((prev) =>
+      prev.includes(code) ? prev.filter((item) => item !== code) : [...prev, code],
+    );
   }
 
   async function saveStage(e: React.FormEvent) {
@@ -80,16 +106,21 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
         {
           method: 'PATCH',
           body: {
+            visaCategory,
             displayLabel: stageLabel,
             slaHours: Number(stageSla),
             enabled: stageEnabled,
+            applicantAllowed: stageApplicantAllowed,
+            allowedNextStages: stageAllowedNext,
             notifyOnEnter: stageNotify,
           },
         },
       );
       setStages(res.stages);
       setEditingStage(null);
-      setBanner(`Updated workflow stage ${editingStage.stageCode} for ${currentUser.organizationName}.`);
+      setBanner(
+        `Updated workflow stage ${editingStage.stageCode} (${visaCategory === '*' ? 'Organization Default' : visaCategory}) for ${currentUser.organizationName}.`,
+      );
     } catch (err: any) {
       setError(err.message || 'Unable to update workflow stage');
     } finally {
@@ -157,6 +188,24 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
     }
   }
 
+  async function handleRetryJob(jobId: string, resetAttempts: boolean) {
+    setBusy(true);
+    setError(null);
+    setBanner(null);
+    try {
+      await apiRequest(`/api/notifications/${jobId}/retry`, {
+        method: 'POST',
+        body: { resetAttempts },
+      });
+      setBanner('Notification retry executed.');
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'Retry failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -197,84 +246,133 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
         <>
           {/* Workflow Stages Table */}
           <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <GitBranch className="w-4 h-4 text-slate-500" />
                 <h2 className="font-display text-base font-semibold">
                   Configurable Organization Workflow Stages
                 </h2>
               </div>
-              {!isAdmin && (
-                <span className="text-xs text-slate-500 dark:text-slate-400">
-                  Read-only (Agency Admin role required to edit)
-                </span>
-              )}
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={visaCategory}
+                  onChange={(e) => {
+                    setEditingStage(null);
+                    setVisaCategory(e.target.value);
+                  }}
+                  className="px-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                >
+                  {VISA_CATEGORY_FILTERS.map((cat) => (
+                    <option key={cat.code} value={cat.code}>
+                      {cat.label}
+                    </option>
+                  ))}
+                </select>
+                {!isAdmin && (
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    Read-only (Agency Admin role required to edit)
+                  </span>
+                )}
+              </div>
             </div>
 
             {editingStage && (
               <form
                 onSubmit={saveStage}
-                className="p-5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end text-xs"
+                className="p-5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50 space-y-4 text-xs"
               >
-                <div className="sm:col-span-4 space-y-1">
-                  <label className="block font-medium text-slate-600 dark:text-slate-400">
-                    Stage Label ({editingStage.stageCode})
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={stageLabel}
-                    onChange={(e) => setStageLabel(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
-                  />
-                </div>
-                <div className="sm:col-span-2 space-y-1">
-                  <label className="block font-medium text-slate-600 dark:text-slate-400">
-                    SLA Hours
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={8760}
-                    value={stageSla}
-                    onChange={(e) => setStageSla(Number(e.target.value))}
-                    className="w-full px-3 py-2 font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
-                  />
-                </div>
-                <div className="sm:col-span-3 flex flex-col gap-2 pb-1">
-                  <label className="flex items-center gap-2 cursor-pointer">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                  <div className="sm:col-span-4 space-y-1">
+                    <label className="block font-medium text-slate-600 dark:text-slate-400">
+                      Stage Label ({editingStage.stageCode})
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={stageEnabled}
-                      onChange={(e) => setStageEnabled(e.target.checked)}
+                      type="text"
+                      required
+                      value={stageLabel}
+                      onChange={(e) => setStageLabel(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
                     />
-                    Stage enabled
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  </div>
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="block font-medium text-slate-600 dark:text-slate-400">
+                      SLA Hours
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={stageNotify}
-                      onChange={(e) => setStageNotify(e.target.checked)}
+                      type="number"
+                      min={1}
+                      max={8760}
+                      value={stageSla}
+                      onChange={(e) => setStageSla(Number(e.target.value))}
+                      className="w-full px-3 py-2 font-mono rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900"
                     />
-                    Notify on stage enter
-                  </label>
+                  </div>
+                  <div className="sm:col-span-3 flex flex-col gap-1.5 pb-1">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={stageEnabled}
+                        onChange={(e) => setStageEnabled(e.target.checked)}
+                      />
+                      Stage enabled
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={stageNotify}
+                        onChange={(e) => setStageNotify(e.target.checked)}
+                      />
+                      Notify on stage enter
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={stageApplicantAllowed}
+                        onChange={(e) => setStageApplicantAllowed(e.target.checked)}
+                      />
+                      Applicant can transition here
+                    </label>
+                  </div>
+                  <div className="sm:col-span-3 flex gap-2 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setEditingStage(null)}
+                      className="px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={busy}
+                      className="inline-flex items-center gap-1 px-3 py-2 text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      Save Stage
+                    </button>
+                  </div>
                 </div>
-                <div className="sm:col-span-3 flex gap-2 justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setEditingStage(null)}
-                    className="px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={busy}
-                    className="inline-flex items-center gap-1 px-3 py-2 text-white bg-blue-700 hover:bg-blue-800 rounded-lg cursor-pointer"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    Save Stage
-                  </button>
+
+                <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="font-medium text-slate-600 dark:text-slate-400">
+                    Allowed Next Stages from {editingStage.stageCode}
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    {(Object.keys(STATUS_LABELS) as InternalCaseStatus[])
+                      .filter((code) => code !== editingStage.stageCode)
+                      .map((code) => (
+                        <label
+                          key={code}
+                          className="flex items-center gap-2 px-2.5 py-1.5 rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={stageAllowedNext.includes(code)}
+                            onChange={() => toggleNextStage(code)}
+                          />
+                          <span className="truncate">{STATUS_LABELS[code]}</span>
+                        </label>
+                      ))}
+                  </div>
                 </div>
               </form>
             )}
@@ -487,14 +585,23 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
                       <th className="py-3 px-5 font-medium">Recipient</th>
                       <th className="py-3 px-5 font-medium">Status</th>
                       <th className="py-3 px-5 font-medium">Attempts</th>
+                      <th className="py-3 px-5 font-medium">Scheduled For</th>
                       <th className="py-3 px-5 font-medium">BullMQ Job ID</th>
+                      {isStaff && <th className="py-3 px-5 font-medium text-right">Action</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                     {jobs.map((j) => (
                       <tr key={j.id}>
                         <td className="py-3 px-5 font-mono">
-                          {j.channel} · {j.templateKey}
+                          <div>
+                            {j.channel} · {j.templateKey}
+                          </div>
+                          {j.lastError && (
+                            <div className="text-[11px] text-red-700 dark:text-red-400 font-sans mt-0.5">
+                              {j.lastError}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-5 font-mono">{j.recipientContact}</td>
                         <td className={`py-3 px-5 font-mono font-medium ${statusSemanticTone(j.status)}`}>
@@ -503,9 +610,28 @@ export const WorkflowTemplatesView: React.FC<WorkflowTemplatesViewProps> = ({ cu
                         <td className="py-3 px-5 font-mono tabular-nums">
                           {j.attempts}/{j.maxAttempts}
                         </td>
+                        <td className="py-3 px-5 font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                          {j.scheduledFor.replace('T', ' ').slice(0, 16)} UTC
+                        </td>
                         <td className="py-3 px-5 font-mono text-slate-500 truncate max-w-[220px]">
                           {j.bullmqJobId || '—'}
                         </td>
+                        {isStaff && (
+                          <td className="py-3 px-5 text-right">
+                            {(j.status === 'RETRY_WAIT' || j.status === 'FAILED_PERMANENT') && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  handleRetryJob(j.id, j.status === 'FAILED_PERMANENT')
+                                }
+                                className="text-blue-700 dark:text-blue-400 hover:underline font-medium cursor-pointer"
+                              >
+                                {j.status === 'FAILED_PERMANENT' ? 'Reset & Retry' : 'Retry Now'}
+                              </button>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

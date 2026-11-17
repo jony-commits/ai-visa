@@ -273,19 +273,44 @@ export function createOrganizationsRouter(db: AppDatabase): Router {
   );
 
   router.get('/admin/tenants', requireAuth, requirePlatformAdmin, (_req, res) => {
+    const nowIso = new Date().toISOString();
     const tenants = db
       .prepare(
         `
         SELECT
           o.id, o.name, o.slug, o.country_code, o.plan_tier, o.status, o.created_at,
           (SELECT COUNT(*) FROM organization_members m WHERE m.organization_id = o.id) AS member_count,
-          (SELECT COUNT(*) FROM visa_applications a WHERE a.organization_id = o.id) AS case_count
+          (SELECT COUNT(*) FROM visa_applications a WHERE a.organization_id = o.id) AS case_count,
+          (SELECT COUNT(*) FROM visa_applications a WHERE a.organization_id = o.id AND a.stage_due_at IS NOT NULL AND a.stage_due_at < ? AND a.internal_status NOT IN ('APPROVED', 'REJECTED', 'WITHDRAWN', 'CLOSED')) AS overdue_cases_count,
+          (SELECT COUNT(*) FROM verification_issues vi WHERE vi.organization_id = o.id AND vi.status = 'OPEN') AS open_issues_count,
+          (SELECT COUNT(*) FROM notification_jobs nj WHERE nj.organization_id = o.id AND nj.status IN ('RETRY_WAIT', 'FAILED_PERMANENT')) AS failed_notifications_count,
+          (SELECT COUNT(*) FROM ai_usage_logs aiu WHERE aiu.organization_id = o.id) AS ai_call_count,
+          (SELECT COALESCE(SUM(aiu.input_tokens + aiu.output_tokens), 0) FROM ai_usage_logs aiu WHERE aiu.organization_id = o.id) AS ai_total_tokens
         FROM organizations o
         ORDER BY o.created_at ASC
       `,
       )
+      .all(nowIso);
+
+    const processingQueue = db
+      .prepare('SELECT status, COUNT(*) AS count FROM processing_jobs GROUP BY status')
       .all();
-    res.json({ tenants });
+    const notificationQueue = db
+      .prepare('SELECT status, COUNT(*) AS count FROM notification_jobs GROUP BY status')
+      .all();
+    const ruleSummary = db
+      .prepare(
+        `
+        SELECT
+          (SELECT COUNT(*) FROM visa_countries WHERE enabled = 1) AS countries_count,
+          (SELECT COUNT(*) FROM visa_categories) AS categories_count,
+          (SELECT COUNT(*) FROM visa_routes) AS routes_count,
+          (SELECT COUNT(*) FROM visa_form_schemas) AS form_schemas_count
+      `,
+      )
+      .get();
+
+    res.json({ tenants, processingQueue, notificationQueue, ruleSummary });
   });
 
   router.patch('/admin/tenants/:orgId/status', requireAuth, requirePlatformAdmin, (req, res) => {
@@ -326,31 +351,56 @@ export function createOrganizationsRouter(db: AppDatabase): Router {
     requireAuth,
     requireRoles('AGENCY_ADMIN', 'VERIFICATION_OFFICER'),
     (req, res) => {
-      const rows = req.auth!.isPlatformAdmin
-        ? db
-            .prepare(
-              `
-              SELECT a.*, u.email AS actor_email, u.full_name AS actor_name, o.name AS organization_name
-              FROM audit_logs a
-              LEFT JOIN users u ON u.id = a.actor_user_id
-              LEFT JOIN organizations o ON o.id = a.organization_id
-              ORDER BY a.created_at DESC
-              LIMIT 100
-            `,
-            )
-            .all()
-        : db
-            .prepare(
-              `
-              SELECT a.*, u.email AS actor_email, u.full_name AS actor_name
-              FROM audit_logs a
-              LEFT JOIN users u ON u.id = a.actor_user_id
-              WHERE a.organization_id = ?
-              ORDER BY a.created_at DESC
-              LIMIT 100
-            `,
-            )
-            .all(req.auth!.organizationId);
+      const { action, resourceType, search, limit } = req.query as {
+        action?: string;
+        resourceType?: string;
+        search?: string;
+        limit?: string;
+      };
+
+      const conditions: string[] = [];
+      const params: Array<string | number> = [];
+
+      if (!req.auth!.isPlatformAdmin) {
+        conditions.push('a.organization_id = ?');
+        params.push(req.auth!.organizationId);
+      }
+
+      if (action && action !== 'ALL') {
+        conditions.push('a.action = ?');
+        params.push(action);
+      }
+
+      if (resourceType && resourceType !== 'ALL') {
+        conditions.push('a.resource_type = ?');
+        params.push(resourceType);
+      }
+
+      if (search?.trim()) {
+        const q = `%${search.trim().toLowerCase()}%`;
+        conditions.push(
+          '(LOWER(COALESCE(u.email, \'\')) LIKE ? OR LOWER(COALESCE(a.action, \'\')) LIKE ? OR LOWER(COALESCE(a.resource_id, \'\')) LIKE ? OR LOWER(COALESCE(a.metadata_json, \'\')) LIKE ?)',
+        );
+        params.push(q, q, q, q);
+      }
+
+      const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const rowLimit = Math.max(10, Math.min(200, Number(limit || 100) || 100));
+      params.push(rowLimit);
+
+      const rows = db
+        .prepare(
+          `
+          SELECT a.*, u.email AS actor_email, u.full_name AS actor_name, o.name AS organization_name
+          FROM audit_logs a
+          LEFT JOIN users u ON u.id = a.actor_user_id
+          LEFT JOIN organizations o ON o.id = a.organization_id
+          ${whereSql}
+          ORDER BY a.created_at DESC
+          LIMIT ?
+        `,
+        )
+        .all(...params);
 
       res.json({ logs: rows });
     },

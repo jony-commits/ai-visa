@@ -25,12 +25,14 @@ export const TeamAdminView: React.FC<TeamAdminViewProps> = ({ currentUser }) => 
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<OrganizationRole>('CONSULTANT');
   const [invitePreview, setInvitePreview] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const isAdmin = currentUser.role === 'AGENCY_ADMIN' || currentUser.isPlatformAdmin;
 
   async function loadAll() {
+    setLoading(true);
     setError(null);
     try {
       const orgRes = await apiRequest<{ organization: any }>('/api/organizations/current');
@@ -53,6 +55,8 @@ export const TeamAdminView: React.FC<TeamAdminViewProps> = ({ currentUser }) => 
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load organization details');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -135,9 +139,19 @@ export const TeamAdminView: React.FC<TeamAdminViewProps> = ({ currentUser }) => 
       </div>
 
       {error && (
-        <div className="p-3.5 rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-xs text-red-700 dark:text-red-300">
-          {error}
+        <div className="p-3.5 rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 text-xs text-red-700 dark:text-red-300 flex items-center justify-between gap-3">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={loadAll}
+            className="px-2.5 py-1 text-xs font-medium border border-red-300 dark:border-red-800 rounded hover:bg-red-100 dark:hover:bg-red-900/40 cursor-pointer shrink-0"
+          >
+            Retry
+          </button>
         </div>
+      )}
+      {loading && !org && (
+        <div className="h-44 bg-slate-200 dark:bg-slate-800 rounded-xl animate-pulse" />
       )}
       {notice && (
         <div className="p-3.5 rounded-lg border border-emerald-300 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/30 text-xs text-emerald-700 dark:text-emerald-300">
@@ -314,6 +328,9 @@ export const TeamAdminView: React.FC<TeamAdminViewProps> = ({ currentUser }) => 
                 <th className="py-3 px-4 font-medium">Plan</th>
                 <th className="py-3 px-4 font-medium text-right">Members</th>
                 <th className="py-3 px-4 font-medium text-right">Cases</th>
+                <th className="py-3 px-4 font-medium text-right">Overdue</th>
+                <th className="py-3 px-4 font-medium text-right">Issues</th>
+                <th className="py-3 px-4 font-medium text-right">AI Tokens</th>
                 <th className="py-3 px-4 font-medium">Status</th>
                 <th className="py-3 px-4 font-medium text-right">Action</th>
               </tr>
@@ -328,6 +345,15 @@ export const TeamAdminView: React.FC<TeamAdminViewProps> = ({ currentUser }) => 
                   <td className="py-3 px-4 font-mono">{t.plan_tier}</td>
                   <td className="py-3 px-4 text-right font-mono tabular-nums">{t.member_count}</td>
                   <td className="py-3 px-4 text-right font-mono tabular-nums">{t.case_count}</td>
+                  <td className="py-3 px-4 text-right font-mono tabular-nums">
+                    {t.overdue_cases_count ?? 0}
+                  </td>
+                  <td className="py-3 px-4 text-right font-mono tabular-nums">
+                    {t.open_issues_count ?? 0}
+                  </td>
+                  <td className="py-3 px-4 text-right font-mono tabular-nums">
+                    {(t.ai_total_tokens ?? 0).toLocaleString()}
+                  </td>
                   <td className="py-3 px-4 font-medium">{t.status}</td>
                   <td className="py-3 px-4 text-right">
                     <button

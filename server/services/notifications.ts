@@ -502,7 +502,7 @@ export async function processNotificationWorker(
     } else {
       const exhausted = nextAttempt >= job.maxAttempts;
       const nextStatus = exhausted ? 'FAILED_PERMANENT' : 'RETRY_WAIT';
-      const backoffMs = nextAttempt * 60_000;
+      const backoffMs = Math.pow(2, nextAttempt - 1) * 60_000;
       const nextScheduledFor = exhausted
         ? job.scheduledFor
         : new Date(nowMs + backoffMs).toISOString();

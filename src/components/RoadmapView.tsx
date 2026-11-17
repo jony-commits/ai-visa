@@ -15,11 +15,11 @@ const PHASES = [
   {
     phase: 'Phase 2',
     title: 'Dynamic Checklists, Secure Uploads & Versioned Rules',
-    status: 'Checklists & Storage Implemented (Rule Builder Pending)',
+    status: 'Implemented & Verified',
     items: [
-      'Dynamic route/dependent document checklists (syncChecklistForCase)',
+      'Dynamic route/dependent/stay-duration document checklists (evaluateCountryVisaRuleEngine & syncChecklistForCase)',
       'Private S3-compatible & HMAC-signed upload/download URLs, magic-byte validation & malware scan hook',
-      'Staff-verified rule builder (DRAFT -> IN_REVIEW -> PUBLISHED) — Pending',
+      'Interactive Country Visa Rule Engine & Dynamic Form Builder (DRAFT -> IN_REVIEW -> PUBLISHED) with live rule simulator',
     ],
   },
   {
@@ -55,10 +55,12 @@ const PHASES = [
   {
     phase: 'Phase 6',
     title: 'Operational Analytics, Super Admin Console & Hardening',
-    status: 'Planned',
+    status: 'Implemented & Verified',
     items: [
-      'Agency turnaround & bottleneck analytics (non-predictive)',
-      'Playwright E2E tests & production security audit',
+      'Role-tailored Applicant, Consultant, Verification Officer, Agency Admin & Super Admin dashboards with operational KPIs and retryable error states',
+      'Agency turnaround, stage bottleneck, staff workload & AI token/OCR usage telemetry (/api/analytics/*)',
+      'Cross-tenant Super Admin governance console (tenants, queue health, rule coverage) with Active Tenant view toggle',
+      'Headless Playwright E2E lifecycle suite, deployment security guide (docs/DEPLOYMENT.md) & remaining external integration tracker',
     ],
   },
 ];

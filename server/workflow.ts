@@ -221,6 +221,7 @@ export function updateOrgWorkflowStage(
     slaHours?: number;
     enabled?: boolean;
     allowedNextStages?: InternalCaseStatus[];
+    applicantAllowed?: boolean;
     notifyOnEnter?: boolean;
     updatedByUserId: string;
   },
@@ -265,19 +266,26 @@ export function updateOrgWorkflowStage(
   const nextAllowed = params.allowedNextStages
     ? JSON.stringify(params.allowedNextStages)
     : String(current.allowed_next_stages_json);
+  const nextApplicantAllowed =
+    params.applicantAllowed === undefined
+      ? Number(current.applicant_allowed)
+      : params.applicantAllowed
+        ? 1
+        : 0;
   const nextNotify =
     params.notifyOnEnter === undefined ? Number(current.notify_on_enter) : params.notifyOnEnter ? 1 : 0;
 
   db.prepare(`
     UPDATE organization_workflow_stages
     SET display_label = ?, sla_hours = ?, enabled = ?, allowed_next_stages_json = ?,
-        notify_on_enter = ?, updated_by_user_id = ?, updated_at = ?
+        applicant_allowed = ?, notify_on_enter = ?, updated_by_user_id = ?, updated_at = ?
     WHERE id = ?
   `).run(
     nextLabel,
     nextSla,
     nextEnabled,
     nextAllowed,
+    nextApplicantAllowed,
     nextNotify,
     params.updatedByUserId,
     new Date().toISOString(),
@@ -322,7 +330,10 @@ export function canTransitionWithOrgConfig(
     if (fromStatus === 'APPLICANT_APPROVAL' && toStatus === 'READY_FOR_SUBMISSION') {
       return { allowed: true, targetStage: toConfig };
     }
-    if (!APPLICANT_ALLOWED_TARGETS.has(toStatus)) {
+    const applicantPermitted = toConfig
+      ? toConfig.applicantAllowed
+      : APPLICANT_ALLOWED_TARGETS.has(toStatus);
+    if (!applicantPermitted) {
       return {
         allowed: false,
         reason: `Applicants cannot transition a case to ${toStatus}. Consultant or officer review is required.`,

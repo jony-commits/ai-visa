@@ -129,6 +129,7 @@ export function createWorkflowTrackingRouter(db: AppDatabase): Router {
         slaHours,
         enabled,
         allowedNextStages,
+        applicantAllowed,
         notifyOnEnter,
       } = req.body as {
         visaCategory?: string;
@@ -136,6 +137,7 @@ export function createWorkflowTrackingRouter(db: AppDatabase): Router {
         slaHours?: number;
         enabled?: boolean;
         allowedNextStages?: InternalCaseStatus[];
+        applicantAllowed?: boolean;
         notifyOnEnter?: boolean;
       };
 
@@ -148,6 +150,7 @@ export function createWorkflowTrackingRouter(db: AppDatabase): Router {
           slaHours,
           enabled,
           allowedNextStages,
+          applicantAllowed,
           notifyOnEnter,
           updatedByUserId: req.auth!.userId,
         });
@@ -164,6 +167,7 @@ export function createWorkflowTrackingRouter(db: AppDatabase): Router {
             slaHours,
             enabled,
             allowedNextStages,
+            applicantAllowed,
             notifyOnEnter,
           },
           ipAddress: req.ip,
@@ -184,11 +188,13 @@ export function createWorkflowTrackingRouter(db: AppDatabase): Router {
     (req, res) => {
       try {
         const appRow = loadAuthorizedCase(db, req.params.id, req.auth!);
-        const { targetSubmissionDeadline, stageDueAt, scheduleReminder } = req.body as {
-          targetSubmissionDeadline?: string | null;
-          stageDueAt?: string | null;
-          scheduleReminder?: boolean;
-        };
+        const { targetSubmissionDeadline, stageDueAt, scheduleReminder, reminderScheduledFor } =
+          req.body as {
+            targetSubmissionDeadline?: string | null;
+            stageDueAt?: string | null;
+            scheduleReminder?: boolean;
+            reminderScheduledFor?: string | null;
+          };
 
         const now = new Date().toISOString();
         const nextTarget =
@@ -227,6 +233,7 @@ export function createWorkflowTrackingRouter(db: AppDatabase): Router {
               stageDueAt: nextStageDue || 'Unset',
             },
             includeConsultant: true,
+            scheduledFor: reminderScheduledFor?.trim() || undefined,
             actorUserId: req.auth!.userId,
           });
         }
@@ -643,6 +650,86 @@ export function createWorkflowTrackingRouter(db: AppDatabase): Router {
           sourceAttribution: String(n.channel),
           timestamp: String(n.dispatched_at || n.updated_at),
         });
+      }
+
+      const taskRows = db
+        .prepare(
+          `
+          SELECT t.*, u_assign.full_name AS assigned_to_name, u_create.full_name AS created_by_name
+          FROM case_tasks t
+          LEFT JOIN users u_assign ON u_assign.id = t.assigned_to_user_id
+          LEFT JOIN users u_create ON u_create.id = t.created_by_user_id
+          WHERE t.application_id = ? AND t.organization_id = ?
+        `,
+        )
+        .all(appId, orgId) as Array<Record<string, unknown>>;
+
+      for (const t of taskRows) {
+        timeline.push({
+          id: `tl_tsk_${String(t.id)}`,
+          category: 'TASK_DEADLINE',
+          title: `Task (${String(t.status)}): ${String(t.title)}`,
+          detail: [
+            t.due_at ? `Due: ${String(t.due_at)}` : 'No due date',
+            t.assigned_to_name ? `Assignee: ${String(t.assigned_to_name)}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · '),
+          actor: t.created_by_name ? String(t.created_by_name) : null,
+          sourceAttribution: 'CASE_TASK',
+          timestamp: String(t.updated_at || t.created_at),
+        });
+      }
+
+      const milestoneAudits = db
+        .prepare(
+          `
+          SELECT a.*, u.full_name AS actor_name
+          FROM audit_logs a
+          LEFT JOIN users u ON u.id = a.actor_user_id
+          WHERE a.organization_id = ?
+            AND a.resource_type = 'VisaApplication'
+            AND a.resource_id = ?
+            AND a.action IN ('CASE_ASSIGNED', 'CASE_UNASSIGNED', 'CASE_DEADLINES_UPDATED')
+        `,
+        )
+        .all(orgId, appId) as Array<Record<string, unknown>>;
+
+      for (const a of milestoneAudits) {
+        const meta = a.metadata_json ? (JSON.parse(String(a.metadata_json)) as Record<string, unknown>) : {};
+        if (a.action === 'CASE_DEADLINES_UPDATED') {
+          timeline.push({
+            id: `tl_aud_${String(a.id)}`,
+            category: 'TASK_DEADLINE',
+            title: 'Case deadlines updated',
+            detail: [
+              meta.targetSubmissionDeadline
+                ? `Target submission: ${String(meta.targetSubmissionDeadline)}`
+                : null,
+              meta.stageDueAt ? `Stage SLA due: ${String(meta.stageDueAt)}` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || 'Deadlines cleared',
+            actor: a.actor_name ? String(a.actor_name) : null,
+            sourceAttribution: 'DEADLINE_TRACKER',
+            timestamp: String(a.created_at),
+          });
+        } else {
+          timeline.push({
+            id: `tl_aud_${String(a.id)}`,
+            category: 'INTERNAL_WORKFLOW',
+            title:
+              a.action === 'CASE_ASSIGNED'
+                ? 'Consultant assigned to case'
+                : 'Consultant unassigned from case',
+            detail: meta.assignedConsultantId
+              ? `Assigned officer ID: ${String(meta.assignedConsultantId)}`
+              : 'Returned to unassigned admin queue',
+            actor: a.actor_name ? String(a.actor_name) : null,
+            sourceAttribution: 'INTERNAL_AGENCY_WORKFLOW',
+            timestamp: String(a.created_at),
+          });
+        }
       }
 
       timeline.sort((a, b) => b.timestamp.localeCompare(a.timestamp));

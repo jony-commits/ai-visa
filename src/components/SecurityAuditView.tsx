@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { KeyRound, MailCheck, ShieldCheck } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { KeyRound, MailCheck, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import { AuditLogItem, AuthUser, formatShortDate } from '../types';
 
@@ -22,6 +22,12 @@ export const SecurityAuditView: React.FC<SecurityAuditViewProps> = ({
   const [verifyPreview, setVerifyPreview] = useState<string | null>(null);
 
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditResourceFilter, setAuditResourceFilter] = useState('ALL');
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -30,15 +36,28 @@ export const SecurityAuditView: React.FC<SecurityAuditViewProps> = ({
     currentUser.role === 'VERIFICATION_OFFICER' ||
     currentUser.isPlatformAdmin;
 
-  useEffect(() => {
-    if (canViewAuditLogs) {
-      apiRequest<{ logs: AuditLogItem[] }>('/api/audit-logs')
-        .then((res) => setAuditLogs(res.logs))
-        .catch(() => {
-          // Ignore if unauthorized
-        });
+  const loadAuditLogs = useCallback(async () => {
+    if (!canViewAuditLogs) return;
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const qs = new URLSearchParams();
+      if (auditResourceFilter !== 'ALL') qs.set('resourceType', auditResourceFilter);
+      if (auditSearch.trim()) qs.set('search', auditSearch.trim());
+      const res = await apiRequest<{ logs: AuditLogItem[] }>(
+        `/api/audit-logs${qs.toString() ? `?${qs.toString()}` : ''}`,
+      );
+      setAuditLogs(res.logs);
+    } catch (err: any) {
+      setAuditError(err.message || 'Failed to load security audit trail.');
+    } finally {
+      setAuditLoading(false);
     }
-  }, [canViewAuditLogs]);
+  }, [auditResourceFilter, auditSearch, canViewAuditLogs]);
+
+  useEffect(() => {
+    loadAuditLogs();
+  }, [loadAuditLogs]);
 
   async function handleStartMfaSetup() {
     setError(null);
@@ -281,34 +300,137 @@ export const SecurityAuditView: React.FC<SecurityAuditViewProps> = ({
       {/* Audit Logs */}
       {canViewAuditLogs && (
         <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
-          <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800">
-            <h2 className="font-display text-base font-semibold">Tenant Security Audit Log</h2>
+          <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-base font-semibold">Tenant Security Audit Log</h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {currentUser.isPlatformAdmin
+                  ? 'Platform-wide security and workflow audit events'
+                  : `Immutable audit events scoped to ${currentUser.organizationName}`}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={auditSearch}
+                  onChange={(e) => setAuditSearch(e.target.value)}
+                  placeholder="Search actor, action, ID..."
+                  className="pl-8 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+                />
+              </div>
+              <select
+                value={auditResourceFilter}
+                onChange={(e) => setAuditResourceFilter(e.target.value)}
+                className="px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950"
+              >
+                <option value="ALL">All Resources</option>
+                <option value="VisaApplication">VisaApplication</option>
+                <option value="ApplicationDocument">ApplicationDocument</option>
+                <option value="ApplicationForm">ApplicationForm</option>
+                <option value="Organization">Organization</option>
+                <option value="User">User</option>
+                <option value="Invitation">Invitation</option>
+              </select>
+              <button
+                type="button"
+                onClick={loadAuditLogs}
+                disabled={auditLoading}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border border-slate-300 dark:border-slate-700 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${auditLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </button>
+            </div>
           </div>
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                <th className="py-3 px-4 font-medium">Timestamp</th>
-                <th className="py-3 px-4 font-medium">Actor</th>
-                <th className="py-3 px-4 font-medium">Action</th>
-                <th className="py-3 px-4 font-medium">Resource</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {auditLogs.map((log) => (
-                <tr key={log.id}>
-                  <td className="py-2.5 px-4 font-mono tabular-nums text-slate-500 whitespace-nowrap">
-                    {formatShortDate(log.created_at)}
-                  </td>
-                  <td className="py-2.5 px-4">{log.actor_email || 'System'}</td>
-                  <td className="py-2.5 px-4 font-mono">{log.action}</td>
-                  <td className="py-2.5 px-4 font-mono text-slate-500">
-                    {log.resource_type}
-                    {log.resource_id ? ` · ${log.resource_id}` : ''}
-                  </td>
-                </tr>
+
+          {auditError && (
+            <div
+              role="alert"
+              className="m-4 p-3 rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 flex items-center justify-between gap-2 text-xs text-red-700 dark:text-red-300"
+            >
+              <span>{auditError}</span>
+              <button
+                type="button"
+                onClick={loadAuditLogs}
+                className="px-2.5 py-1 font-medium border border-red-400 dark:border-red-700 rounded cursor-pointer"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {auditLoading && auditLogs.length === 0 ? (
+            <div className="p-6 space-y-2">
+              {[0, 1, 2].map((idx) => (
+                <div key={idx} className="h-9 bg-slate-100 dark:bg-slate-800/60 rounded animate-pulse" />
               ))}
-            </tbody>
-          </table>
+            </div>
+          ) : auditLogs.length === 0 ? (
+            <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
+              No audit log entries match the selected filters.
+            </div>
+          ) : (
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
+                  <th className="py-3 px-4 font-medium">Timestamp</th>
+                  <th className="py-3 px-4 font-medium">Actor</th>
+                  <th className="py-3 px-4 font-medium">Action</th>
+                  <th className="py-3 px-4 font-medium">Resource</th>
+                  <th className="py-3 px-4 font-medium text-right">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                {auditLogs.map((log) => {
+                  const isExpanded = expandedLogId === log.id;
+                  return (
+                    <React.Fragment key={log.id}>
+                      <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="py-2.5 px-4 font-mono tabular-nums text-slate-500 whitespace-nowrap">
+                          {formatShortDate(log.created_at)}
+                        </td>
+                        <td className="py-2.5 px-4">
+                          {log.actor_email || 'System'}
+                          {log.organization_name && currentUser.isPlatformAdmin
+                            ? ` · ${log.organization_name}`
+                            : ''}
+                        </td>
+                        <td className="py-2.5 px-4 font-mono">{log.action}</td>
+                        <td className="py-2.5 px-4 font-mono text-slate-500">
+                          {log.resource_type}
+                          {log.resource_id ? ` · ${log.resource_id}` : ''}
+                        </td>
+                        <td className="py-2.5 px-4 text-right">
+                          {log.metadata_json ? (
+                            <button
+                              type="button"
+                              onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                              className="text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer"
+                            >
+                              {isExpanded ? 'Hide' : 'Inspect'}
+                            </button>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                      {isExpanded && log.metadata_json && (
+                        <tr className="bg-slate-50 dark:bg-slate-950/60">
+                          <td colSpan={5} className="px-4 py-2.5">
+                            <pre className="text-[11px] font-mono text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-all">
+                              {log.metadata_json}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </section>
       )}
     </div>

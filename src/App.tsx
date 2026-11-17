@@ -11,6 +11,7 @@ import {
   Moon,
   Plus,
   Shield,
+  SlidersHorizontal,
   Sun,
   UserCheck,
   Users,
@@ -21,6 +22,8 @@ import { AuthPortal } from './components/AuthPortal';
 import { CaseDetailPanel } from './components/CaseDetailPanel';
 import { CasesView } from './components/CasesView';
 import { RoadmapView } from './components/RoadmapView';
+import { RoleDashboardView } from './components/RoleDashboardView';
+import { RuleFormBuilderView } from './components/RuleFormBuilderView';
 import { SecurityAuditView } from './components/SecurityAuditView';
 import { TeamAdminView } from './components/TeamAdminView';
 import { VerificationQueueView } from './components/VerificationQueueView';
@@ -28,10 +31,7 @@ import { WorkflowTemplatesView } from './components/WorkflowTemplatesView';
 import { apiRequest, setStoredToken } from './lib/api';
 import {
   AuthUser,
-  formatShortDate,
   ROLE_LABELS,
-  STATUS_LABELS,
-  statusSemanticTone,
   VisaCase,
   VisaCategoryItem,
   VisaCountryItem,
@@ -44,6 +44,7 @@ type NavSection =
   | 'kanban'
   | 'verification'
   | 'workflows'
+  | 'rules'
   | 'profile'
   | 'team'
   | 'security'
@@ -55,6 +56,7 @@ const NAV_TITLES: Record<NavSection, string> = {
   kanban: 'Case Kanban Board',
   verification: 'Document Verification',
   workflows: 'Workflows & Notifications',
+  rules: 'Country Rule Engine & Form Builder',
   profile: 'Applicant Onboarding & Profile',
   team: 'Organization & Team Access',
   security: 'Security & Audit Trail',
@@ -83,6 +85,7 @@ export default function App() {
   const [categories, setCategories] = useState<VisaCategoryItem[]>([]);
   const [routes, setRoutes] = useState<VisaRouteItem[]>([]);
   const [onboardingCompleted, setOnboardingCompleted] = useState<boolean | null>(null);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -99,22 +102,27 @@ export default function App() {
   }, [darkMode]);
 
   const loadWorkspaceData = useCallback(async () => {
-    const [casesRes, catalogRes, profileRes] = await Promise.all([
-      apiRequest<{ cases: VisaCase[] }>('/api/cases'),
-      apiRequest<{
-        countries: VisaCountryItem[];
-        categories: VisaCategoryItem[];
-        routes: VisaRouteItem[];
-      }>('/api/catalog/routes'),
-      apiRequest<{ profile: { onboardingCompleted: boolean } | null }>('/api/applicant/profile').catch(
-        () => ({ profile: null }),
-      ),
-    ]);
-    setCases(casesRes.cases);
-    setCountries(catalogRes.countries);
-    setCategories(catalogRes.categories);
-    setRoutes(catalogRes.routes);
-    setOnboardingCompleted(Boolean(profileRes.profile?.onboardingCompleted));
+    setWorkspaceError(null);
+    try {
+      const [casesRes, catalogRes, profileRes] = await Promise.all([
+        apiRequest<{ cases: VisaCase[] }>('/api/cases'),
+        apiRequest<{
+          countries: VisaCountryItem[];
+          categories: VisaCategoryItem[];
+          routes: VisaRouteItem[];
+        }>('/api/catalog/routes'),
+        apiRequest<{ profile: { onboardingCompleted: boolean } | null }>('/api/applicant/profile').catch(
+          () => ({ profile: null }),
+        ),
+      ]);
+      setCases(casesRes.cases);
+      setCountries(catalogRes.countries);
+      setCategories(catalogRes.categories);
+      setRoutes(catalogRes.routes);
+      setOnboardingCompleted(Boolean(profileRes.profile?.onboardingCompleted));
+    } catch (err: any) {
+      setWorkspaceError(err.message || 'Failed to load workspace cases and catalog data.');
+    }
   }, []);
 
   const refreshSession = useCallback(async () => {
@@ -164,28 +172,6 @@ export default function App() {
     );
   }
 
-  const pendingActionCount = cases.filter((c) =>
-    [
-      'APPLICANT_INFO_PENDING',
-      'DOCUMENT_COLLECTION',
-      'ADDITIONAL_INFO_REQUESTED',
-      'RETURNED_FOR_CORRECTION',
-      'APPLICANT_APPROVAL',
-    ].includes(c.internal_status),
-  ).length;
-
-  const reviewQueueCount = cases.filter((c) =>
-    ['DOCUMENT_VERIFICATION', 'CONSULTANT_REVIEW', 'READY_FOR_SUBMISSION'].includes(
-      c.internal_status,
-    ),
-  ).length;
-
-  const submittedCount = cases.filter((c) =>
-    ['SUBMITTED', 'AWAITING_APPOINTMENT_DECISION', 'DECISION_RECEIVED', 'APPROVED'].includes(
-      c.internal_status,
-    ),
-  ).length;
-
   const isStaff = user.role !== 'APPLICANT' || user.isPlatformAdmin;
 
   const navItems: Array<{ id: NavSection; label: string; icon: React.ReactNode }> = [
@@ -203,6 +189,11 @@ export default function App() {
             id: 'workflows' as NavSection,
             label: 'Workflows & Alerts',
             icon: <GitBranch className="w-4 h-4" />,
+          },
+          {
+            id: 'rules' as NavSection,
+            label: 'Rules & Form Builder',
+            icon: <SlidersHorizontal className="w-4 h-4" />,
           },
         ]
       : []),
@@ -326,7 +317,23 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 p-5 lg:p-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-5 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
+          {workspaceError && (
+            <div
+              role="alert"
+              className="p-4 rounded-xl border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 flex flex-wrap items-center justify-between gap-3 text-xs text-red-800 dark:text-red-300"
+            >
+              <span>{workspaceError}</span>
+              <button
+                type="button"
+                onClick={loadWorkspaceData}
+                className="px-3 py-1.5 font-medium border border-red-400 dark:border-red-700 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/40 cursor-pointer"
+              >
+                Retry Load
+              </button>
+            </div>
+          )}
+
           {selectedCaseId ? (
             <CaseDetailPanel
               caseId={selectedCaseId}
@@ -339,164 +346,17 @@ export default function App() {
               onUpdated={loadWorkspaceData}
             />
           ) : section === 'overview' ? (
-            <div className="space-y-8">
-              <div>
-                <h1 className="font-display text-2xl font-bold tracking-tight">
-                  Workspace Overview
-                </h1>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Tenant-isolated operations for {user.organizationName} · Role: {ROLE_LABELS[user.role]}
-                </p>
-              </div>
-
-              {user.role === 'APPLICANT' && onboardingCompleted === false && (
-                <div className="bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <div className="font-display text-sm font-semibold">
-                      Complete your applicant onboarding profile
-                    </div>
-                    <p className="text-xs text-slate-600 dark:text-slate-400">
-                      Add your legal details, encrypted passport record, travel destination, and data consent before submitting documents.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSection('profile')}
-                    className="px-4 py-2 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg whitespace-nowrap cursor-pointer"
-                  >
-                    Start Onboarding
-                  </button>
-                </div>
-              )}
-
-              {/* 4-Column Tabular Metrics */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-1">
-                  <div className="text-xs text-slate-500 dark:text-slate-400">Active Cases</div>
-                  <div className="font-display text-2xl font-bold font-mono tabular-nums">
-                    {cases.length}
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Scoped to current tenant
-                  </div>
-                </div>
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-1">
-                  <div className="text-xs text-slate-500 dark:text-slate-400">Pending Intake / Docs</div>
-                  <div className="font-display text-2xl font-bold font-mono tabular-nums text-amber-700 dark:text-amber-400">
-                    {pendingActionCount}
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Awaiting applicant action
-                  </div>
-                </div>
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-1">
-                  <div className="text-xs text-slate-500 dark:text-slate-400">In Review / Ready</div>
-                  <div className="font-display text-2xl font-bold font-mono tabular-nums">
-                    {reviewQueueCount}
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    Consultant or officer queue
-                  </div>
-                </div>
-                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-1">
-                  <div className="text-xs text-slate-500 dark:text-slate-400">Submitted / Decided</div>
-                  <div className="font-display text-2xl font-bold font-mono tabular-nums text-emerald-700 dark:text-emerald-400">
-                    {submittedCount}
-                  </div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400">
-                    {routes.length} demo routes configured
-                  </div>
-                </div>
-              </div>
-
-              {/* Recent Cases Table */}
-              <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
-                <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                  <h2 className="font-display text-base font-semibold">Recent Visa Applications</h2>
-                  <button
-                    type="button"
-                    onClick={() => setSection('cases')}
-                    className="text-xs font-medium text-blue-700 dark:text-blue-400 hover:underline cursor-pointer"
-                  >
-                    View all cases
-                  </button>
-                </div>
-                {cases.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
-                    No applications created in this workspace yet.
-                  </div>
-                ) : (
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                        <th className="py-3 px-5 font-medium">Reference</th>
-                        <th className="py-3 px-5 font-medium">Applicant</th>
-                        <th className="py-3 px-5 font-medium">Route</th>
-                        <th className="py-3 px-5 font-medium">Internal Status</th>
-                        <th className="py-3 px-5 font-medium">Official Status</th>
-                        <th className="py-3 px-5 font-medium text-right">Updated</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                      {cases.slice(0, 6).map((c) => (
-                        <tr
-                          key={c.id}
-                          onClick={() => {
-                            setSelectedCaseTab('overview');
-                            setSelectedCaseId(c.id);
-                          }}
-                          className="hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer"
-                        >
-                          <td className="py-3 px-5 font-mono tabular-nums font-medium text-blue-700 dark:text-blue-400">
-                            {c.reference_number}
-                          </td>
-                          <td className="py-3 px-5 font-medium">{c.applicant_name}</td>
-                          <td className="py-3 px-5 text-slate-600 dark:text-slate-400">
-                            {c.destination_country_name || c.destination_country} · {c.visa_category}
-                          </td>
-                          <td className={`py-3 px-5 font-medium ${statusSemanticTone(c.internal_status)}`}>
-                            {STATUS_LABELS[c.internal_status]}
-                          </td>
-                          <td className="py-3 px-5 text-slate-500 dark:text-slate-400 font-mono">
-                            {c.government_status === 'NOT_SUBMITTED'
-                              ? 'Not submitted'
-                              : `${c.government_status} (${c.government_status_source})`}
-                          </td>
-                          <td className="py-3 px-5 text-right font-mono tabular-nums text-slate-500">
-                            {formatShortDate(c.updated_at)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </section>
-
-              {/* Configured Demonstration Routes */}
-              <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="font-display text-base font-semibold">
-                    Configured Visa Routes (Demonstration Rules)
-                  </h2>
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    Do not treat sample data as live government policy
-                  </span>
-                </div>
-                <div className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
-                  {routes.map((r) => (
-                    <div key={r.id} className="py-3 flex flex-wrap items-center justify-between gap-4">
-                      <div className="space-y-0.5">
-                        <div className="font-medium">{r.title}</div>
-                        <div className="text-slate-500 dark:text-slate-400">{r.summary}</div>
-                      </div>
-                      <div className="font-mono text-slate-500 dark:text-slate-400 shrink-0">
-                        {r.destination_country} · {r.rule_version}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
+            <RoleDashboardView
+              user={user}
+              cases={cases}
+              routes={routes}
+              onboardingCompleted={onboardingCompleted}
+              onSelectCase={(caseId, tab = 'overview') => {
+                setSelectedCaseTab(tab);
+                setSelectedCaseId(caseId);
+              }}
+              onNavigate={(next) => selectNav(next)}
+            />
           ) : section === 'cases' || section === 'kanban' ? (
             <CasesView
               key={section}
@@ -523,6 +383,13 @@ export default function App() {
             />
           ) : section === 'workflows' && isStaff ? (
             <WorkflowTemplatesView currentUser={user} />
+          ) : section === 'rules' && isStaff ? (
+            <RuleFormBuilderView
+              currentUser={user}
+              countries={countries}
+              categories={categories}
+              onCatalogUpdated={loadWorkspaceData}
+            />
           ) : section === 'profile' ? (
             <ApplicantProfileView
               currentUser={user}

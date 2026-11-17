@@ -1,0 +1,729 @@
+// Canonical PostgreSQL Prisma Schema for Meridian Visa Platform
+// Used for production & Docker Compose deployments. Local zero-setup runtime uses matching SQLite tables in server/db.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrganizationRole {
+  APPLICANT
+  CONSULTANT
+  VERIFICATION_OFFICER
+  AGENCY_ADMIN
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
+enum InternalCaseStatus {
+  DRAFT
+  APPLICANT_INFO_PENDING
+  DOCUMENT_COLLECTION
+  DOCUMENT_VERIFICATION
+  FORM_PREPARATION
+  CONSULTANT_REVIEW
+  APPLICANT_APPROVAL
+  READY_FOR_SUBMISSION
+  SUBMITTED
+  AWAITING_APPOINTMENT_DECISION
+  DECISION_RECEIVED
+  CLOSED
+  ADDITIONAL_INFO_REQUESTED
+  RETURNED_FOR_CORRECTION
+  ON_HOLD
+  WITHDRAWN
+  REJECTED
+  APPROVED
+}
+
+enum RuleApprovalStatus {
+  DRAFT
+  IN_REVIEW
+  PUBLISHED
+  ARCHIVED
+}
+
+enum DocumentReviewStatus {
+  PENDING
+  EXTRACTED
+  NEEDS_CORRECTION
+  VERIFIED
+  REJECTED
+}
+
+enum ConsentType {
+  PERSONAL_DATA_PROCESSING
+  EXTERNAL_AI_PROCESSING
+  COMMUNICATIONS
+}
+
+model User {
+  id                     String   @id @default(cuid())
+  email                  String   @unique
+  passwordHash           String
+  fullName               String
+  emailVerified          Boolean  @default(false)
+  verificationTokenHash  String?
+  resetTokenHash         String?
+  resetTokenExpiresAt    DateTime?
+  mfaEnabled             Boolean  @default(false)
+  mfaSecretEncrypted     String?
+  mfaBackupCodesHash     String?
+  isPlatformAdmin        Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  sessions               Session[]
+  memberships            OrganizationMember[]
+  applicantProfiles      ApplicantProfile[]
+  consents               ApplicantConsent[]
+  applicantApplications  VisaApplication[] @relation("ApplicantApplications")
+  assignedApplications   VisaApplication[] @relation("AssignedConsultant")
+  auditLogs              AuditLog[]
+}
+
+model Session {
+  id                   String    @id @default(cuid())
+  userId               String
+  tokenHash            String    @unique
+  activeOrganizationId String?
+  mfaVerified          Boolean   @default(false)
+  expiresAt            DateTime
+  revokedAt            DateTime?
+  ipAddress            String?
+  userAgent            String?
+  createdAt            DateTime  @default(now())
+
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Organization {
+  id          String             @id @default(cuid())
+  name        String
+  slug        String             @unique
+  countryCode String             @default("US")
+  planTier    String             @default("STANDARD")
+  status      OrganizationStatus @default(ACTIVE)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  members      OrganizationMember[]
+  invitations  Invitation[]
+  profiles     ApplicantProfile[]
+  applications VisaApplication[]
+  auditLogs    AuditLog[]
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  organizationId String
+  userId         String
+  role           OrganizationRole
+  status         String           @default("ACTIVE")
+  createdAt      DateTime         @default(now())
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model Invitation {
+  id              String           @id @default(cuid())
+  organizationId  String
+  email           String
+  role            OrganizationRole
+  tokenHash       String           @unique
+  invitedByUserId String
+  acceptedAt      DateTime?
+  expiresAt       DateTime
+  createdAt       DateTime         @default(now())
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
+}
+
+model ApplicantProfile {
+  id                  String   @id @default(cuid())
+  userId              String
+  organizationId      String
+  fullLegalName       String
+  dateOfBirth         String
+  nationality         String
+  residenceCountry    String
+  phone               String
+  email               String
+  travelDestination   String
+  visaCategory        String
+  intendedTravelStart String?
+  intendedTravelEnd   String?
+  purposeOfTravel     String?
+  dependentsJson      String   @default("[]")
+  onboardingCompleted Boolean  @default(false)
+  updatedAt           DateTime @updatedAt
+
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization        Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  passportRecord      PassportRecord?
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model PassportRecord {
+  id                      String   @id @default(cuid())
+  applicantProfileId      String   @unique
+  passportNumberEncrypted String
+  passportNumberMasked    String
+  issuingCountry          String
+  issueDate               String
+  expiryDate              String
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  applicantProfile        ApplicantProfile @relation(fields: [applicantProfileId], references: [id], onDelete: Cascade)
+}
+
+model ApplicantConsent {
+  id             String      @id @default(cuid())
+  userId         String
+  organizationId String
+  consentType    ConsentType
+  granted        Boolean
+  policyVersion  String      @default("2026-01")
+  grantedAt      DateTime    @default(now())
+  revokedAt      DateTime?
+  ipAddress      String?
+
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, organizationId])
+}
+
+model VisaCountry {
+  code         String            @id
+  name         String
+  region       String
+  enabled      Boolean           @default(true)
+  routes       VisaRoute[]
+  applications VisaApplication[]
+}
+
+model VisaCategory {
+  code         String            @id
+  name         String
+  description  String
+  routes       VisaRoute[]
+  applications VisaApplication[]
+}
+
+model VisaRoute {
+  id                 String            @id @default(cuid())
+  destinationCountry String
+  visaCategoryCode   String
+  title              String
+  ruleVersion        String
+  isDemoRule         Boolean           @default(true)
+  officialSourceUrl  String?
+  sourceVerifiedAt   DateTime?
+  effectiveFrom      DateTime          @default(now())
+  summary            String
+
+  country            VisaCountry       @relation(fields: [destinationCountry], references: [code])
+  category           VisaCategory      @relation(fields: [visaCategoryCode], references: [code])
+  applications       VisaApplication[]
+
+  @@index([destinationCountry, visaCategoryCode])
+}
+
+model VisaRuleSet {
+  id                 String            @id @default(cuid())
+  routeId            String
+  destinationCountry String
+  visaCategoryCode   String
+  versions           VisaRuleVersion[]
+}
+
+model VisaRuleVersion {
+  id               String             @id @default(cuid())
+  ruleSetId        String
+  version          String
+  approvalStatus   RuleApprovalStatus @default(DRAFT)
+  isDemoRule       Boolean            @default(true)
+  officialSourceUrl String?
+  sourceVerifiedAt DateTime?
+  rulesJson        String
+  approvedByUserId String?
+  createdAt        DateTime           @default(now())
+
+  ruleSet          VisaRuleSet        @relation(fields: [ruleSetId], references: [id], onDelete: Cascade)
+}
+
+model VisaApplication {
+  id                     String             @id @default(cuid())
+  referenceNumber        String             @unique
+  organizationId         String
+  applicantUserId        String
+  assignedConsultantId   String?
+  routeId                String?
+  destinationCountry     String
+  originCountry          String
+  nationality            String
+  visaCategory           String
+  ruleVersion            String
+  internalStatus         InternalCaseStatus @default(DRAFT)
+  governmentStatus           String             @default("NOT_SUBMITTED")
+  governmentStatusSource     String             @default("UNAVAILABLE")
+  governmentTrackingRef      String?
+  governmentStatusVerifiedAt DateTime?
+  intendedTravelDate         String?
+  targetSubmissionDeadline   DateTime?
+  stageDueAt                 DateTime?
+  purposeOfTravel            String?
+  appointmentAt              DateTime?
+  submissionNotes            String?
+  createdAt                  DateTime           @default(now())
+  updatedAt                  DateTime           @updatedAt
+
+  organization           Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  applicant              User               @relation("ApplicantApplications", fields: [applicantUserId], references: [id])
+  assignedConsultant     User?              @relation("AssignedConsultant", fields: [assignedConsultantId], references: [id])
+  route                  VisaRoute?         @relation(fields: [routeId], references: [id])
+  country                VisaCountry        @relation(fields: [destinationCountry], references: [code])
+  category               VisaCategory       @relation(fields: [visaCategory], references: [code])
+  statusHistory          ApplicationStatusHistory[]
+  tasks                  CaseTask[]
+  notes                  CaseComment[]
+  requirements           DocumentRequirement[]
+  documents              ApplicationDocument[]
+  verifications          DocumentVerification[]
+  form                   ApplicationForm?
+  submissionHandoffs     SubmissionHandoff[]
+  appointments           CaseAppointment[]
+  statusEvents           StatusTrackingEvent[]
+  notificationJobs       NotificationJob[]
+
+  @@index([organizationId, internalStatus])
+  @@index([applicantUserId])
+  @@index([assignedConsultantId])
+}
+
+model ApplicationStatusHistory {
+  id              String          @id @default(cuid())
+  applicationId   String
+  organizationId  String
+  fromStatus      String?
+  toStatus        String
+  changedByUserId String
+  reason          String?
+  createdAt       DateTime        @default(now())
+
+  application     VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+  @@index([organizationId])
+}
+
+model CaseTask {
+  id              String          @id @default(cuid())
+  applicationId   String
+  organizationId  String
+  title           String
+  description     String?
+  assignedToUserId String?
+  dueAt           DateTime?
+  status          String          @default("OPEN")
+  createdByUserId String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  application     VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, applicationId])
+}
+
+model CaseComment {
+  id             String          @id @default(cuid())
+  applicationId  String
+  organizationId String
+  authorUserId   String
+  visibility     String          @default("INTERNAL")
+  body           String
+  createdAt      DateTime        @default(now())
+
+  application    VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, applicationId])
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String?
+  actorUserId    String?
+  action         String
+  resourceType   String
+  resourceId     String?
+  metadataJson   String?
+  ipAddress      String?
+  createdAt      DateTime     @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  actor          User?         @relation(fields: [actorUserId], references: [id])
+
+  @@index([organizationId, createdAt])
+}
+
+model DocumentRequirement {
+  id              String          @id @default(cuid())
+  applicationId   String
+  organizationId  String
+  requirementCode String
+  title           String
+  description     String
+  documentType    String
+  isMandatory     Boolean         @default(true)
+  conditionNote   String?
+  status          String          @default("MISSING")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  application     VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId, requirementCode])
+  @@index([organizationId, applicationId])
+}
+
+model ApplicationDocument {
+  id                 String               @id @default(cuid())
+  applicationId      String
+  organizationId     String
+  requirementCode    String?
+  documentType       String
+  originalFilename   String
+  mimeType           String
+  byteSize           Int
+  sha256Checksum     String
+  version            Int                  @default(1)
+  storageProvider    String               @default("PRIVATE_LOCAL")
+  storageBucket      String
+  storageKey         String
+  expiryDate         String?
+  malwareScanStatus  String               @default("PENDING")
+  reviewStatus       DocumentReviewStatus @default(PENDING)
+  reviewedByUserId   String?
+  reviewedAt         DateTime?
+  reviewNotes        String?
+  uploadedByUserId   String
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  application        VisaApplication      @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  extraction         DocumentExtraction?
+  issues             VerificationIssue[]
+
+  @@index([organizationId, applicationId])
+  @@index([sha256Checksum])
+}
+
+model DocumentExtraction {
+  id                   String              @id @default(cuid())
+  documentId           String              @unique
+  applicationId        String
+  organizationId       String
+  ocrProvider          String
+  aiProvider           String
+  modelName            String
+  promptVersion        String
+  rawOcrText           String
+  detectedDocumentType String
+  extractedJson        String
+  correctedJson        String?
+  confidenceScore      Float
+  isConfirmed          Boolean             @default(false)
+  confirmedByUserId    String?
+  confirmedAt          DateTime?
+  aiDisclaimer         String
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  document             ApplicationDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, applicationId])
+}
+
+model DocumentVerification {
+  id                     String          @id @default(cuid())
+  applicationId          String          @unique
+  organizationId         String
+  formattingStatus       String          @default("PENDING")
+  extractionStatus       String          @default("PENDING")
+  consistencyStatus      String          @default("PENDING")
+  externalIdentityStatus String          @default("NOT_CONNECTED")
+  manualOfficerStatus    String          @default("PENDING_REVIEW")
+  summaryNote            String?
+  verifiedAt             DateTime?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  application            VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  issues                 VerificationIssue[]
+
+  @@index([organizationId])
+}
+
+model VerificationIssue {
+  id                  String                @id @default(cuid())
+  verificationId      String
+  applicationId       String
+  organizationId      String
+  sourceDocumentId    String?
+  issueType           String
+  severity            String
+  verificationLayer   String
+  evidence            String
+  explanation         String
+  suggestedCorrection String
+  status              String                @default("OPEN")
+  resolvedByUserId    String?
+  resolutionNote      String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  verification        DocumentVerification  @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+  sourceDocument      ApplicationDocument?  @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, applicationId])
+}
+
+model ProcessingJob {
+  id             String    @id @default(cuid())
+  organizationId String
+  applicationId  String
+  documentId     String?
+  queueName      String
+  jobName        String
+  bullmqJobId    String?
+  status         String    @default("QUEUED")
+  attempts       Int       @default(0)
+  payloadJson    String
+  resultJson     String?
+  errorMessage   String?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  @@index([organizationId, applicationId])
+}
+
+model AIUsageLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  applicationId  String?
+  documentId     String?
+  provider       String
+  model          String
+  promptVersion  String
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  status         String
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+model VisaFormSchema {
+  id                 String   @id @default(cuid())
+  destinationCountry String
+  visaCategoryCode   String
+  schemaKey          String
+  version            String
+  title              String
+  isDemoRule         Boolean  @default(true)
+  officialSourceUrl  String?
+  schemaJson         String
+  approvalStatus     String   @default("PUBLISHED")
+  createdAt          DateTime @default(now())
+
+  forms              ApplicationForm[]
+
+  @@unique([schemaKey, version])
+  @@index([destinationCountry, visaCategoryCode])
+}
+
+model ApplicationForm {
+  id                         String    @id @default(cuid())
+  applicationId              String    @unique
+  organizationId             String
+  formSchemaId               String
+  schemaVersion              String
+  currentStep                Int       @default(0)
+  answersJson                String    @default("{}")
+  sourceAttributionJson      String    @default("{}")
+  aiSuggestionsJson          String    @default("{}")
+  validationErrorsJson       String    @default("[]")
+  isComplete                 Boolean   @default(false)
+  applicantApproved          Boolean   @default(false)
+  applicantApprovedByUserId  String?
+  applicantApprovedAt        DateTime?
+  applicantAttestationText   String?
+  revisionNumber             Int       @default(1)
+  lastAutosavedAt            DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  application                VisaApplication          @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  formSchema                 VisaFormSchema           @relation(fields: [formSchemaId], references: [id])
+  revisions                  ApplicationFormRevision[]
+
+  @@index([organizationId, applicationId])
+}
+
+model ApplicationFormRevision {
+  id                    String          @id @default(cuid())
+  applicationFormId     String
+  applicationId         String
+  organizationId        String
+  revisionNumber        Int
+  answersJson           String
+  sourceAttributionJson String
+  changedByUserId       String
+  changeReason          String?
+  createdAt             DateTime        @default(now())
+
+  applicationForm       ApplicationForm @relation(fields: [applicationFormId], references: [id], onDelete: Cascade)
+
+  @@index([applicationFormId, revisionNumber])
+}
+
+model SubmissionHandoff {
+  id                      String          @id @default(cuid())
+  applicationId           String
+  organizationId          String
+  adapterId               String
+  submissionMode          String
+  status                  String
+  handoffPackageJson      String
+  externalPortalUrl       String?
+  externalConfirmationRef String?
+  submittedByUserId       String
+  submittedAt             DateTime?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  application             VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, applicationId])
+}
+
+model OrganizationWorkflowStage {
+  id                     String   @id @default(cuid())
+  organizationId         String
+  visaCategory           String   @default("*")
+  stageCode              String
+  displayLabel           String
+  sortOrder              Int
+  slaHours               Int      @default(72)
+  enabled                Boolean  @default(true)
+  allowedNextStagesJson  String
+  applicantAllowed       Boolean  @default(false)
+  notifyOnEnter          Boolean  @default(true)
+  updatedByUserId        String?
+  updatedAt              DateTime @updatedAt
+
+  @@unique([organizationId, visaCategory, stageCode])
+  @@index([organizationId])
+}
+
+model CaseAppointment {
+  id               String          @id @default(cuid())
+  applicationId    String
+  organizationId   String
+  appointmentType  String
+  centerName       String
+  centerAddress    String?
+  scheduledAt      DateTime
+  timezone         String          @default("UTC")
+  bookingReference String?
+  status           String          @default("SCHEDULED")
+  instructions     String?
+  createdByUserId  String
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  application      VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, applicationId])
+}
+
+model StatusTrackingEvent {
+  id                String          @id @default(cuid())
+  applicationId     String
+  organizationId    String
+  statusCategory    String          @default("GOVERNMENT_EXTERNAL")
+  statusText        String
+  sourceType        String
+  trackingReference String?
+  adapterId         String?
+  rawEvidenceNote   String?
+  verifiedByUserId  String?
+  verifiedAt        DateTime
+  createdAt         DateTime        @default(now())
+
+  application       VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, applicationId, verifiedAt])
+}
+
+model NotificationTemplate {
+  id              String   @id @default(cuid())
+  organizationId  String   @default("*")
+  templateKey     String
+  channel         String
+  eventTrigger    String
+  subjectTemplate String?
+  bodyTemplate    String
+  isActive        Boolean  @default(true)
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, templateKey, channel])
+}
+
+model NotificationJob {
+  id               String          @id @default(cuid())
+  organizationId   String
+  applicationId    String?
+  recipientUserId  String?
+  recipientContact String
+  channel          String
+  templateKey      String
+  subject          String?
+  renderedBody     String
+  scheduledFor     DateTime
+  status           String          @default("SCHEDULED")
+  attempts         Int             @default(0)
+  maxAttempts      Int             @default(3)
+  lastError        String?
+  bullmqJobId      String?
+  dispatchedAt     DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  application      VisaApplication? @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status, scheduledFor])
+  @@index([applicationId])
+}
+
